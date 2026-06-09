@@ -339,6 +339,74 @@ func (h *Harness) CheckGetTimesOut(c *kvclient.KVClient, key string) {
 	}
 }
 
+// AddNodeToCluster proposes adding a new node via the leader's Raft AddPeer.
+// The caller must have already created the KVService and connected it to the
+// cluster peers (bidirectional wiring).
+func (h *Harness) AddNodeToCluster(leaderId int, newId int) {
+	tlog("AddNodeToCluster: leader=%d new=%d", leaderId, newId)
+	raftSrv := h.kvCluster[leaderId].RaftServer()
+	addr := h.kvCluster[newId].GetRaftListenAddr()
+	ok := raftSrv.AddPeer(newId, addr)
+	if !ok {
+		h.t.Fatalf("AddNodeToCluster: AddPeer(%d) from leader %d returned false", newId, leaderId)
+	}
+	// Extend harness tracking slices if needed.
+	h.n = max(h.n, newId+1)
+	for len(h.connected) <= newId {
+		h.connected = append(h.connected, true)
+	}
+	for len(h.alive) <= newId {
+		h.alive = append(h.alive, true)
+	}
+}
+
+// RemoveNodeFromCluster proposes removing a node via the leader's Raft RemovePeer.
+func (h *Harness) RemoveNodeFromCluster(leaderId int, targetId int) {
+	tlog("RemoveNodeFromCluster: leader=%d target=%d", leaderId, targetId)
+	raftSrv := h.kvCluster[leaderId].RaftServer()
+	ok := raftSrv.RemovePeer(targetId)
+	if !ok {
+		h.t.Fatalf("RemoveNodeFromCluster: RemovePeer(%d) from leader %d returned false", targetId, leaderId)
+	}
+	if targetId < len(h.connected) {
+		h.connected[targetId] = false
+	}
+}
+
+// CheckPeerList asserts that the underlying Raft peer list of the given KVService
+// matches wantPeers (order-independent).  It retries for up to 2 seconds.
+func (h *Harness) CheckPeerList(id int, wantPeers []int) {
+	h.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got := h.kvCluster[id].PeerIDs()
+		if sameIntSet(got, wantPeers) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got := h.kvCluster[id].PeerIDs()
+	h.t.Errorf("server %d peerIds = %v; want %v", id, got, wantPeers)
+}
+
+// sameIntSet returns true when a and b contain the same integers (ignoring order).
+func sameIntSet(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := make(map[int]int, len(a))
+	for _, v := range a {
+		count[v]++
+	}
+	for _, v := range b {
+		count[v]--
+		if count[v] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func tlog(format string, a ...any) {
 	format = "[TEST] " + format
 	log.Printf(format, a...)

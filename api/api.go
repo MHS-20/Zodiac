@@ -97,3 +97,46 @@ var responseName = map[ResponseStatus]string{
 func (rs ResponseStatus) String() string {
 	return responseName[rs]
 }
+
+type JoinRequest struct {
+	ID       int    `json:"id"`
+	RaftAddr string `json:"raft_addr"`
+	HTTPAddr string `json:"http_addr"`
+}
+
+type JoinResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+}
+
+func (jr *JoinResponse) Status() ResponseStatus { return jr.RespStatus }
+
+type LeaveRequest struct {
+	ID int `json:"id"`
+}
+
+type LeaveResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+}
+
+func (lr *LeaveResponse) Status() ResponseStatus { return lr.RespStatus }
+
+type PeerInfo struct {
+	ID       int    `json:"id"`
+	HTTPAddr string `json:"http_addr"`
+}
+
+type StatusResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+	ID         int            `json:"id"`
+	IsLeader   bool           `json:"is_leader"`
+	PeerCount  int            `json:"peer_count"`
+}
+
+func (sr *StatusResponse) Status() ResponseStatus { return sr.RespStatus }
+
+type MembersResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+	Members    []PeerInfo     `json:"members"`
+}
+
+func (mr *MembersResponse) Status() ResponseStatus { return mr.RespStatus }

@@ -183,3 +183,85 @@ func contextDeadlineExceeded(ctx context.Context) bool {
 	}
 	return false
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic cluster discovery
+// ---------------------------------------------------------------------------
+
+// DiscoverMembers queries any reachable node's /members/ endpoint and returns
+// the full list of cluster members.  It tries each seed address in order.
+func DiscoverMembers(ctx context.Context, seedAddrs []string) ([]api.PeerInfo, error) {
+	for i, addr := range seedAddrs {
+		discoverCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		path := fmt.Sprintf("http://%s/members/", addr)
+		req, err := http.NewRequestWithContext(discoverCtx, http.MethodGet, path, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancel()
+			if i == len(seedAddrs)-1 {
+				return nil, fmt.Errorf("discovery failed: %w", err)
+			}
+			continue
+		}
+		var membersResp api.MembersResponse
+		if err := json.NewDecoder(resp.Body).Decode(&membersResp); err != nil {
+			resp.Body.Close()
+			cancel()
+			continue
+		}
+		resp.Body.Close()
+		cancel()
+		if membersResp.RespStatus == api.StatusOK {
+			return membersResp.Members, nil
+		}
+	}
+	return nil, fmt.Errorf("discovery failed: no reachable seed nodes")
+}
+
+// NewWithDiscovery creates a client with a seed set of addresses, discovers
+// the full cluster membership via /members/, and populates the address list
+// from the response.  If discovery fails, the seed addresses are used as-is.
+func NewWithDiscovery(ctx context.Context, seedAddrs []string) *KVClient {
+	members, err := DiscoverMembers(ctx, seedAddrs)
+	if err != nil {
+		return New(seedAddrs)
+	}
+	addrs := make([]string, 0, len(members))
+	for _, m := range members {
+		if m.HTTPAddr != "" {
+			addrs = append(addrs, m.HTTPAddr)
+		}
+	}
+	if len(addrs) == 0 {
+		return New(seedAddrs)
+	}
+	return New(addrs)
+}
+
+// RefreshMembers updates the client's address list by querying /members/ on
+// the currently assumed leader (or the first known address if no leader is
+// assumed).  Returns the number of addresses discovered.
+func (c *KVClient) RefreshMembers(ctx context.Context) (int, error) {
+	addr := c.addrs[c.assumedLeader]
+	members, err := DiscoverMembers(ctx, []string{addr})
+	if err != nil {
+		return 0, err
+	}
+	newAddrs := make([]string, 0, len(members))
+	for _, m := range members {
+		if m.HTTPAddr != "" {
+			newAddrs = append(newAddrs, m.HTTPAddr)
+		}
+	}
+	if len(newAddrs) > 0 {
+		c.addrs = newAddrs
+		if c.assumedLeader >= len(c.addrs) {
+			c.assumedLeader = 0
+		}
+	}
+	return len(newAddrs), nil
+}
