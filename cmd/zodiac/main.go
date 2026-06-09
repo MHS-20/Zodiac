@@ -16,6 +16,7 @@ import (
 
 	"github.com/MHS-20/Raft/raft"
 	"github.com/MHS-20/Zodiac/api"
+	"github.com/MHS-20/Zodiac/config"
 	"github.com/MHS-20/Zodiac/kvservice"
 )
 
@@ -24,7 +25,7 @@ func main() {
 		log.Fatal("Usage: zodiac <config.json>")
 	}
 
-	cfg, err := loadConfig(os.Args[1])
+	cfg, err := config.LoadConfig(os.Args[1])
 	if err != nil {
 		log.Fatalf("Config error: %v", err)
 	}
@@ -97,7 +98,7 @@ func main() {
 
 	logger.Info("node started", "http", httpAddr, "raft", kvs.GetRaftListenAddr().String())
 
-	if !cfg.isInitialMember() {
+	if !cfg.IsInitialMember() {
 		joinCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := joinCluster(joinCtx, kvs, cfg)
 		cancel()
@@ -113,9 +114,7 @@ func main() {
 	kvs.Shutdown()
 }
 
-// joinCluster discovers a cluster member via the initial seeds and sends a
-// /join/ request to the leader.
-func joinCluster(ctx context.Context, kvs *kvservice.KVService, cfg *Config) error {
+func joinCluster(ctx context.Context, kvs *kvservice.KVService, cfg *config.Config) error {
 	seeds := make([]string, 0, len(cfg.InitialCluster))
 	for _, p := range cfg.InitialCluster {
 		seeds = append(seeds, p.HTTPAddr)
@@ -147,8 +146,6 @@ func joinCluster(ctx context.Context, kvs *kvservice.KVService, cfg *Config) err
 	return ctx.Err()
 }
 
-// findLeader discovers the current Raft leader by probing the known nodes.
-// If the seed node is not the leader, it fetches /members/ and probes each.
 func findLeader(ctx context.Context, seedAddr string, allSeeds []string) (string, error) {
 	probe := func(addr string) (bool, error) {
 		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -175,10 +172,8 @@ func findLeader(ctx context.Context, seedAddr string, allSeeds []string) (string
 		return seedAddr, nil
 	}
 
-	// Fetch members from the seed.
 	members, err := fetchMembers(ctx, seedAddr)
 	if err != nil {
-		// Fall back to probing all seeds.
 		for _, addr := range allSeeds {
 			isLeader, err := probe(addr)
 			if err == nil && isLeader {
@@ -200,7 +195,6 @@ func findLeader(ctx context.Context, seedAddr string, allSeeds []string) (string
 	return "", fmt.Errorf("leader not found among members")
 }
 
-// fetchMembers calls GET /members/ on the given address.
 func fetchMembers(ctx context.Context, addr string) ([]api.PeerInfo, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -224,7 +218,6 @@ func fetchMembers(ctx context.Context, addr string) ([]api.PeerInfo, error) {
 	return mr.Members, nil
 }
 
-// sendJoin POSTs a JoinRequest to the leader's /join/ endpoint.
 func sendJoin(ctx context.Context, leaderAddr string, nodeID int, raftAddr, httpAddr string) error {
 	jr := api.JoinRequest{
 		ID:       nodeID,

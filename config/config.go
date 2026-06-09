@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"os"
 )
 
-// Config describes a single node's cluster configuration.
 type Config struct {
 	NodeID         int          `json:"node_id"`
 	HTTPPort       int          `json:"http_port"`
@@ -14,15 +13,13 @@ type Config struct {
 	InitialCluster []PeerConfig `json:"initial_cluster"`
 }
 
-// PeerConfig describes one member in the initial cluster.
 type PeerConfig struct {
 	ID       int    `json:"id"`
 	HTTPAddr string `json:"http_addr"`
 	RaftAddr string `json:"raft_addr"`
 }
 
-// loadConfig reads and parses a JSON config file.
-func loadConfig(path string) (*Config, error) {
+func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
@@ -43,8 +40,6 @@ func loadConfig(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// PeerIDs returns the list of peer IDs from the initial cluster, excluding
-// this node's own ID.
 func (c *Config) PeerIDs() []int {
 	ids := make([]int, 0, len(c.InitialCluster))
 	for _, p := range c.InitialCluster {
@@ -55,7 +50,6 @@ func (c *Config) PeerIDs() []int {
 	return ids
 }
 
-// PeerMap returns the initial cluster as a map from ID to PeerConfig.
 func (c *Config) PeerMap() map[int]PeerConfig {
 	m := make(map[int]PeerConfig, len(c.InitialCluster))
 	for _, p := range c.InitialCluster {
@@ -64,8 +58,6 @@ func (c *Config) PeerMap() map[int]PeerConfig {
 	return m
 }
 
-// HTTPAddr returns the HTTP address of this node from the initial cluster
-// config, or "localhost:<port>" as a fallback.
 func (c *Config) HTTPAddr() string {
 	for _, p := range c.InitialCluster {
 		if p.ID == c.NodeID {
@@ -75,8 +67,7 @@ func (c *Config) HTTPAddr() string {
 	return fmt.Sprintf("localhost:%d", c.HTTPPort)
 }
 
-// isInitialMember returns true if this node's ID appears in the initial cluster.
-func (c *Config) isInitialMember() bool {
+func (c *Config) IsInitialMember() bool {
 	for _, p := range c.InitialCluster {
 		if p.ID == c.NodeID {
 			return true

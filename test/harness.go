@@ -1,4 +1,4 @@
-package main
+package test
 
 import (
 	"context"
@@ -19,34 +19,19 @@ func init() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 }
 
-// Test harness for kvservice and client system tests.
 type Harness struct {
 	n int
 
-	// kvCluster is a list of all KVService instances participating in a cluster.
-	// A service's index into this list is its ID in the cluster.
-	kvCluster []*kvservice.KVService
-
-	// kvServiceAddrs is a list of HTTP addresses (localhost:<PORT>) the KV
-	// services are accepting client commands on.
+	kvCluster     []*kvservice.KVService
 	kvServiceAddrs []string
 
 	storage []*raft.MapStorage
 
 	t *testing.T
 
-	// connected has a bool per server in cluster, specifying whether this server
-	// is currently connected to peers (if false, it's partitioned and no messages
-	// will pass to or from it).
 	connected []bool
+	alive     []bool
 
-	// alive has a bool per server in the cluster, specifying whether this server
-	// is currently alive (false means it has crashed and wasn't restarted yet).
-	// connected implies alive.
-	alive []bool
-
-	// ctx is context used for the HTTP client commands used by tests.
-	// ctxCancel is its cancellation function.
 	ctx       context.Context
 	ctxCancel func()
 }
@@ -58,7 +43,6 @@ func NewHarness(t *testing.T, n int) *Harness {
 	alive := make([]bool, n)
 	storage := make([]*raft.MapStorage, n)
 
-	// Create all KVService instances in this cluster.
 	for i := range n {
 		peerIds := make([]int, 0)
 		for p := range n {
@@ -72,8 +56,6 @@ func NewHarness(t *testing.T, n int) *Harness {
 		alive[i] = true
 	}
 
-	// Connect the Raft peers of the services to each other and close the ready
-	// channel to signal to them it's all ready.
 	for i := range n {
 		for j := range n {
 			if i != j {
@@ -84,7 +66,6 @@ func NewHarness(t *testing.T, n int) *Harness {
 	}
 	close(ready)
 
-	// Each KVService instance serves a REST API on a different port
 	kvServiceAddrs := make([]string, n)
 	for i := range n {
 		port := 14200 + i
@@ -135,9 +116,6 @@ func (h *Harness) ReconnectServiceToPeers(id int) {
 	h.connected[id] = true
 }
 
-// CrashService "crashes" a service by disconnecting it from all peers and
-// then asking it to shut down. We're not going to be using the same service
-// instance again.
 func (h *Harness) CrashService(id int) {
 	tlog("Crash %d", id)
 	h.DisconnectServiceFromPeers(id)
@@ -147,8 +125,6 @@ func (h *Harness) CrashService(id int) {
 	}
 }
 
-// RestartService "restarts" a service by creating a new instance and
-// connecting it to peers.
 func (h *Harness) RestartService(id int) {
 	if h.alive[id] {
 		log.Fatalf("id=%d is alive in RestartService", id)
@@ -171,8 +147,6 @@ func (h *Harness) RestartService(id int) {
 	time.Sleep(20 * time.Millisecond)
 }
 
-// DelayNextHTTPResponseFromService delays the next HTTP response from this
-// service to a client.
 func (h *Harness) DelayNextHTTPResponseFromService(id int) {
 	tlog("Delaying next HTTP response from %d", id)
 	h.kvCluster[id].DelayNextHTTPResponse()
@@ -184,7 +158,6 @@ func (h *Harness) Shutdown() {
 		h.connected[i] = false
 	}
 
-	// These help the HTTP server in KVService shut down properly.
 	http.DefaultClient.CloseIdleConnections()
 	h.ctxCancel()
 
@@ -198,8 +171,6 @@ func (h *Harness) Shutdown() {
 	}
 }
 
-// NewClient creates a new client that will contact all the existing live
-// services.
 func (h *Harness) NewClient() *kvclient.KVClient {
 	var addrs []string
 	for i := range h.n {
@@ -210,8 +181,6 @@ func (h *Harness) NewClient() *kvclient.KVClient {
 	return kvclient.New(addrs)
 }
 
-// NewClientWithRandomAddrsOrder creates a new client that will contact all
-// the existing live services, but in a randomized order.
 func (h *Harness) NewClientWithRandomAddrsOrder() *kvclient.KVClient {
 	var addrs []string
 	for i := range h.n {
@@ -225,18 +194,11 @@ func (h *Harness) NewClientWithRandomAddrsOrder() *kvclient.KVClient {
 	return kvclient.New(addrs)
 }
 
-// NewClientSingleService creates a new client that will contact only a single
-// service (specified by id). Note that if this isn't the leader, the client
-// may get stuck in retries.
 func (h *Harness) NewClientSingleService(id int) *kvclient.KVClient {
 	addrs := h.kvServiceAddrs[id : id+1]
 	return kvclient.New(addrs)
 }
 
-// CheckSingleLeader checks that only a single server thinks it's the leader.
-// Returns the leader's id in the Raft cluster. It retries serveral times if
-// no leader is identified yet, so this method is also useful to check that
-// the Raft cluster settled on a leader and is ready to execute commands.
 func (h *Harness) CheckSingleLeader() int {
 	for r := 0; r < 8; r++ {
 		leaderId := -1
@@ -259,8 +221,6 @@ func (h *Harness) CheckSingleLeader() int {
 	return -1
 }
 
-// CheckPut sends a Put request through client c, and checks there are no
-// errors. Returns (prevValue, keyFound).
 func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
@@ -271,8 +231,6 @@ func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, boo
 	return pv, f
 }
 
-// CheckAppend sends a Append request through client c, and checks there are no
-// errors. Returns (prevValue, keyFound).
 func (h *Harness) CheckAppend(c *kvclient.KVClient, key, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
@@ -283,9 +241,6 @@ func (h *Harness) CheckAppend(c *kvclient.KVClient, key, value string) (string, 
 	return pv, f
 }
 
-// CheckGet sends a Get request through client c, and checks there are
-// no errors; it also checks that the key was found, and has the expected
-// value.
 func (h *Harness) CheckGet(c *kvclient.KVClient, key string, wantValue string) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
@@ -301,8 +256,6 @@ func (h *Harness) CheckGet(c *kvclient.KVClient, key string, wantValue string) {
 	}
 }
 
-// CheckCAS sends a CAS request through client c, and checks there are no
-// errors. Returns (prevValue, keyFound).
 func (h *Harness) CheckCAS(c *kvclient.KVClient, key, compare, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
@@ -313,8 +266,6 @@ func (h *Harness) CheckCAS(c *kvclient.KVClient, key, compare, value string) (st
 	return pv, f
 }
 
-// CheckGetNotFound sends a Get request through client c, and checks there are
-// no errors, but the key isn't found in the service.
 func (h *Harness) CheckGetNotFound(c *kvclient.KVClient, key string) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
@@ -327,9 +278,6 @@ func (h *Harness) CheckGetNotFound(c *kvclient.KVClient, key string) {
 	}
 }
 
-// CheckGetTimesOut checks that a Get request with the given client will
-// time out if we set up a context with a deadline, because the client is
-// unable to get the service to commit its command.
 func (h *Harness) CheckGetTimesOut(c *kvclient.KVClient, key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -339,9 +287,6 @@ func (h *Harness) CheckGetTimesOut(c *kvclient.KVClient, key string) {
 	}
 }
 
-// AddNodeToCluster proposes adding a new node via the leader's Raft AddPeer.
-// The caller must have already created the KVService and connected it to the
-// cluster peers (bidirectional wiring).
 func (h *Harness) AddNodeToCluster(leaderId int, newId int) {
 	tlog("AddNodeToCluster: leader=%d new=%d", leaderId, newId)
 	raftSrv := h.kvCluster[leaderId].RaftServer()
@@ -350,7 +295,6 @@ func (h *Harness) AddNodeToCluster(leaderId int, newId int) {
 	if !ok {
 		h.t.Fatalf("AddNodeToCluster: AddPeer(%d) from leader %d returned false", newId, leaderId)
 	}
-	// Extend harness tracking slices if needed.
 	h.n = max(h.n, newId+1)
 	for len(h.connected) <= newId {
 		h.connected = append(h.connected, true)
@@ -360,7 +304,6 @@ func (h *Harness) AddNodeToCluster(leaderId int, newId int) {
 	}
 }
 
-// RemoveNodeFromCluster proposes removing a node via the leader's Raft RemovePeer.
 func (h *Harness) RemoveNodeFromCluster(leaderId int, targetId int) {
 	tlog("RemoveNodeFromCluster: leader=%d target=%d", leaderId, targetId)
 	raftSrv := h.kvCluster[leaderId].RaftServer()
@@ -373,8 +316,6 @@ func (h *Harness) RemoveNodeFromCluster(leaderId int, targetId int) {
 	}
 }
 
-// CheckPeerList asserts that the underlying Raft peer list of the given KVService
-// matches wantPeers (order-independent).  It retries for up to 2 seconds.
 func (h *Harness) CheckPeerList(id int, wantPeers []int) {
 	h.t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -389,7 +330,6 @@ func (h *Harness) CheckPeerList(id int, wantPeers []int) {
 	h.t.Errorf("server %d peerIds = %v; want %v", id, got, wantPeers)
 }
 
-// sameIntSet returns true when a and b contain the same integers (ignoring order).
 func sameIntSet(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
@@ -405,6 +345,10 @@ func sameIntSet(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func sleepMs(n int) {
+	time.Sleep(time.Duration(n) * time.Millisecond)
 }
 
 func tlog(format string, a ...any) {
