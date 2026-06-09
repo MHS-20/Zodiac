@@ -1,6 +1,9 @@
 package kvservice
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 type DataStore struct {
 	sync.Mutex
@@ -48,4 +51,21 @@ func (ds *DataStore) CAS(key, compare, value string) (string, bool) {
 		ds.data[key] = value
 	}
 	return prevValue, ok
+}
+
+func (ds *DataStore) CopyAll() map[string]string {
+	ds.Lock()
+	defer ds.Unlock()
+
+	out := make(map[string]string, len(ds.data))
+	maps.Copy(out, ds.data)
+	return out
+}
+
+func (ds *DataStore) RestoreAll(data map[string]string) {
+	ds.Lock()
+	defer ds.Unlock()
+
+	ds.data = make(map[string]string, len(data))
+	maps.Copy(ds.data, data)
 }

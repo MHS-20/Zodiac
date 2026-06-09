@@ -1,6 +1,7 @@
 package kvservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/gob"
 	"fmt"
@@ -16,6 +17,16 @@ import (
 	"github.com/MHS-20/Raft/raft"
 	"github.com/MHS-20/Zodiac/api"
 )
+
+// snapshotThreshold is the number of committed log entries between snapshots.
+// Tune this value to trade off memory/disk usage against snapshotting overhead.
+const snapshotThreshold = 100
+
+// kvSnapshot is the serialisable state that gets stored in a Raft snapshot.
+type kvSnapshot struct {
+	Store                  map[string]string
+	LastRequestIDPerClient map[int64]int64
+}
 
 type KVService struct {
 	sync.Mutex
@@ -35,6 +46,10 @@ type KVService struct {
 	srv                    *http.Server
 	lastRequestIDPerClient map[int64]int64
 	delayNextHTTPResponse  atomic.Bool
+
+	// lastSnapshotIndex tracks the log index of the most recent snapshot so we
+	// know how many entries have accumulated since the last compaction.
+	lastSnapshotIndex int
 }
 
 func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVService {
@@ -55,6 +70,7 @@ func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVS
 		ds:                     NewDataStore(),
 		commitSubs:             make(map[int]chan Command),
 		lastRequestIDPerClient: make(map[int64]int64),
+		lastSnapshotIndex:      -1,
 	}
 
 	kvs.runUpdater()
@@ -149,7 +165,12 @@ func (kvs *KVService) handlePut(w http.ResponseWriter, req *http.Request) {
 	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
-	case commitCmd := <-sub:
+	case commitCmd, ok := <-sub:
+		if !ok {
+			// Subscription was cancelled because a snapshot covered this index.
+			kvs.sendHTTPResponse(w, api.PutResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
 		if commitCmd.ServiceID == kvs.id {
 			if commitCmd.IsDuplicate {
 				// If this command is a duplicate, it wasn't executed as a result of
@@ -198,7 +219,12 @@ func (kvs *KVService) handleAppend(w http.ResponseWriter, req *http.Request) {
 	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
-	case commitCmd := <-sub:
+	case commitCmd, ok := <-sub:
+		if !ok {
+			// Subscription was cancelled because a snapshot covered this index.
+			kvs.sendHTTPResponse(w, api.AppendResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
 		if commitCmd.ServiceID == kvs.id {
 			if commitCmd.IsDuplicate {
 				kvs.sendHTTPResponse(w, api.AppendResponse{
@@ -243,9 +269,14 @@ func (kvs *KVService) handleGet(w http.ResponseWriter, req *http.Request) {
 	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
-	case commitCmd := <-sub:
+	case commitCmd, ok := <-sub:
+		if !ok {
+			// Subscription was cancelled because a snapshot covered this index.
+			kvs.sendHTTPResponse(w, api.GetResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
 		if commitCmd.ServiceID == kvs.id {
-			if commitCmd.IsDuplicate {
+			if commitCmd.IsDuplicate && commitCmd.Kind != CommandGet {
 				kvs.sendHTTPResponse(w, api.GetResponse{
 					RespStatus: api.StatusDuplicateRequest,
 				})
@@ -290,7 +321,12 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
-	case commitCmd := <-sub:
+	case commitCmd, ok := <-sub:
+		if !ok {
+			// Subscription was cancelled because a snapshot covered this index.
+			kvs.sendHTTPResponse(w, api.CASResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
 		if commitCmd.ServiceID == kvs.id {
 			if commitCmd.IsDuplicate {
 				kvs.sendHTTPResponse(w, api.CASResponse{
@@ -311,39 +347,181 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// encodeSnapshot serialises the current KV state into a byte slice suitable
+// for passing to raft.Server.InstallSnapshot.
+// Must be called with kvs.Lock held.
+func (kvs *KVService) encodeSnapshot() ([]byte, error) {
+	snap := kvSnapshot{
+		Store:                  kvs.ds.CopyAll(),
+		LastRequestIDPerClient: make(map[int64]int64, len(kvs.lastRequestIDPerClient)),
+	}
+	for k, v := range kvs.lastRequestIDPerClient {
+		snap.LastRequestIDPerClient[k] = v
+	}
+
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(snap); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// decodeSnapshot deserialises a snapshot previously produced by encodeSnapshot.
+func decodeSnapshot(data []byte) (kvSnapshot, error) {
+	var snap kvSnapshot
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&snap); err != nil {
+		return kvSnapshot{}, err
+	}
+	return snap, nil
+}
+
+// maybeSnapshot takes a snapshot if enough entries have accumulated since the
+// last one.  It is called after every committed entry, without kvs.Lock held.
+// index and term are the Raft log position of the just-applied entry.
+//
+// The lock is held for the entire operation — including the InstallSnapshot
+// call — so that a second entry committed in rapid succession cannot also pass
+// the threshold check before the first call has updated lastSnapshotIndex
+// inside the Raft layer, which would result in two overlapping snapshots.
+// InstallSnapshot is non-blocking on the Raft side (it hands work off
+// internally), so holding the KV lock here is safe.
+func (kvs *KVService) maybeSnapshot(index, term int) {
+	kvs.Lock()
+	defer kvs.Unlock()
+
+	if index-kvs.lastSnapshotIndex < snapshotThreshold {
+		return
+	}
+
+	data, err := kvs.encodeSnapshot()
+	if err != nil {
+		kvs.logger.Error("failed to encode snapshot", "err", err)
+		return
+	}
+	kvs.lastSnapshotIndex = index
+
+	kvs.logger.Debug("installing snapshot", "index", index, "term", term)
+	kvs.rs.InstallSnapshot(index, term, data)
+}
+
+// runUpdater is the main apply loop.  It drains both commitChan (normal log
+// entries) and the Raft snapshot channel (InstallSnapshot from the leader).
+//
+// Snapshot processing is given priority over commit entry processing so that
+// on restart the snapshot state (including lastRequestIDPerClient) is restored
+// before any log entries are replayed.  Without this prioritization a race in
+// the select loop can cause commitChan entries to be applied against an empty
+// lastRequestIDPerClient, leading lastSnapshotIndex to be stuck at -1 and an
+// incorrect snapshot to be taken.
 func (kvs *KVService) runUpdater() {
 	go func() {
-		for entry := range kvs.commitChan {
-			cmd := entry.Command.(Command)
+		snapshotCh   := kvs.rs.SnapshotReady()
+		snapshotDone := kvs.rs.SnapshotDone()
 
-			// Duplicate command detection.
-			lastReqID, ok := kvs.lastRequestIDPerClient[cmd.ClientID]
-			if ok && lastReqID >= cmd.RequestID {
-				kvs.logger.Debug("duplicate request", "requestID", cmd.RequestID, "clientID", cmd.ClientID)
-				cmd = Command{
-					Kind:        cmd.Kind,
-					IsDuplicate: true,
-				}
-			} else {
-				kvs.lastRequestIDPerClient[cmd.ClientID] = cmd.RequestID
+		handleSnapshot := func(snap raft.SnapshotEntry) {
+			kvs.logger.Debug("restoring from snapshot", "index", snap.Index)
 
-				switch cmd.Kind {
-				case CommandGet:
-					cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
-				case CommandPut:
-					cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value)
-				case CommandAppend:
-					cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
-				case CommandCAS:
-					cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
-				default:
-					panic(fmt.Errorf("unexpected command %v", cmd))
-				}
+			decoded, err := decodeSnapshot(snap.Data)
+			if err != nil {
+				kvs.logger.Error("failed to decode snapshot", "err", err)
+				return
 			}
 
-			if sub := kvs.popCommitSubscription(entry.Index); sub != nil {
-				sub <- cmd
-				close(sub)
+			kvs.Lock()
+			kvs.ds.RestoreAll(decoded.Store)
+			kvs.lastRequestIDPerClient = decoded.LastRequestIDPerClient
+			kvs.lastSnapshotIndex = snap.Index
+
+			// Cancel any pending subscriptions for indices that are now
+			// covered by the snapshot — those requests are gone.
+			for idx, ch := range kvs.commitSubs {
+				if idx <= snap.Index {
+					close(ch)
+					delete(kvs.commitSubs, idx)
+				}
+			}
+			kvs.Unlock()
+		}
+
+		for {
+			// Priority: drain any pending snapshot before processing commits.
+			// Without this, a race on startup between SnapshotReady() and
+			// commitChan can cause log entries to be applied before the snapshot
+			// state is restored, corrupting lastRequestIDPerClient and
+			// lastSnapshotIndex.
+			select {
+			case snap, ok := <-snapshotCh:
+				if !ok {
+					return
+				}
+				handleSnapshot(snap)
+				continue
+			default:
+			}
+
+			select {
+			case snap, ok := <-snapshotCh:
+				if !ok {
+					return
+				}
+				handleSnapshot(snap)
+
+			// ----------------------------------------------------------------
+			// A normal committed log entry arrived.
+			// ----------------------------------------------------------------
+			case entry, ok := <-kvs.commitChan:
+				if !ok {
+					return
+				}
+				cmd := entry.Command.(Command)
+
+				// Duplicate command detection.
+				kvs.Lock()
+				lastReqID, exists := kvs.lastRequestIDPerClient[cmd.ClientID]
+				if exists && lastReqID >= cmd.RequestID {
+					kvs.logger.Debug("duplicate request", "requestID", cmd.RequestID, "clientID", cmd.ClientID)
+					// Mark as duplicate but still execute Get commands —
+					// they are read-only and the caller needs the value.
+					if cmd.Kind == CommandGet {
+						cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
+					}
+					cmd.IsDuplicate = true
+				} else {
+					kvs.lastRequestIDPerClient[cmd.ClientID] = cmd.RequestID
+
+					switch cmd.Kind {
+					case CommandGet:
+						cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
+					case CommandPut:
+						cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value)
+					case CommandAppend:
+						cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
+					case CommandCAS:
+						cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
+					default:
+						kvs.Unlock()
+						panic(fmt.Errorf("unexpected command %v", cmd))
+					}
+				}
+
+				sub := kvs.popCommitSubscriptionLocked(entry.Index)
+				kvs.Unlock()
+
+				if sub != nil {
+					sub <- cmd
+					close(sub)
+				}
+
+				// Trigger a snapshot if we've accumulated enough entries.
+				// Only do this after the initial snapshot has been restored,
+				// otherwise lastSnapshotIndex is -1 and an incorrect snapshot
+				// would be taken with an empty lastRequestIDPerClient.
+				if kvs.lastSnapshotIndex >= 0 {
+					kvs.maybeSnapshot(entry.Index, entry.Term)
+				}
+
+			case <-snapshotDone:
+				return
 			}
 		}
 	}()
@@ -362,10 +540,9 @@ func (kvs *KVService) createCommitSubscription(logIndex int) chan Command {
 	return ch
 }
 
-func (kvs *KVService) popCommitSubscription(logIndex int) chan Command {
-	kvs.Lock()
-	defer kvs.Unlock()
-
+// popCommitSubscriptionLocked removes and returns the subscription channel for
+// logIndex.  Must be called with kvs.Lock held.
+func (kvs *KVService) popCommitSubscriptionLocked(logIndex int) chan Command {
 	ch := kvs.commitSubs[logIndex]
 	delete(kvs.commitSubs, logIndex)
 	return ch
