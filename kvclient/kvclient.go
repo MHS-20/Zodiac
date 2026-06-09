@@ -5,15 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/MHS-20/Zodiac/api"
 )
-
-const DebugClient = 1
 
 type KVClient struct {
 	addrs []string
@@ -21,6 +20,7 @@ type KVClient struct {
 	// index of the service we assume is the current leader
 	assumedLeader int
 	clientID      int64
+	logger        *slog.Logger
 
 	// each client manages its own requestID, and increments it monotonically and
 	// atomically each time the user asks to send a new request.
@@ -28,10 +28,14 @@ type KVClient struct {
 }
 
 func New(serviceAddrs []string) *KVClient {
+	id := clientCount.Add(1)
 	return &KVClient{
 		addrs:         serviceAddrs,
 		assumedLeader: 0,
-		clientID:      clientCount.Add(1),
+		clientID:      id,
+		logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})).With("component", "client", "clientID", id),
 	}
 }
 
@@ -95,15 +99,15 @@ FindLeader:
 		retryCtx, retryCtxCancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		path := fmt.Sprintf("http://%s/%s/", c.addrs[c.assumedLeader], route)
 
-		c.clientlog("sending %#v to %v", req, path)
+		c.logger.Debug("sending request", "path", path, "request", fmt.Sprintf("%#v", req))
 		if err := sendJSONRequest(retryCtx, path, req, resp); err != nil {
 			if contextDone(ctx) {
-				c.clientlog("parent context done; bailing out")
+				c.logger.Debug("parent context done; bailing out")
 				retryCtxCancel()
 				return err
 			} else if contextDeadlineExceeded(retryCtx) {
 				// retry a different service.
-				c.clientlog("timed out: will try next address")
+				c.logger.Debug("timed out; will try next address")
 				c.assumedLeader = (c.assumedLeader + 1) % len(c.addrs)
 				retryCtxCancel()
 				continue FindLeader
@@ -111,12 +115,12 @@ FindLeader:
 			retryCtxCancel()
 			return err
 		}
-		c.clientlog("received response %#v", resp)
+		c.logger.Debug("received response", "response", fmt.Sprintf("%#v", resp))
 
 		// response received
 		switch resp.Status() {
 		case api.StatusNotLeader:
-			c.clientlog("not leader: will try next address")
+			c.logger.Debug("not leader; will try next address")
 			c.assumedLeader = (c.assumedLeader + 1) % len(c.addrs)
 			retryCtxCancel()
 			continue FindLeader
@@ -132,14 +136,6 @@ FindLeader:
 		default:
 			panic("unreachable")
 		}
-	}
-}
-
-func (c *KVClient) clientlog(format string, args ...any) {
-	if DebugClient > 0 {
-		clientName := fmt.Sprintf("[client%03d]", c.clientID)
-		format = clientName + " " + format
-		log.Printf(format, args...)
 	}
 }
 

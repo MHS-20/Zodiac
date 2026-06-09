@@ -5,8 +5,10 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,12 +17,11 @@ import (
 	"github.com/MHS-20/Zodiac/api"
 )
 
-const DebugKV = 1
-
 type KVService struct {
 	sync.Mutex
-	id int
-	rs *raft.Server
+	id     int
+	rs     *raft.Server
+	logger *slog.Logger
 
 	// commitChan is the commit channel passed to the Raft server; when commands
 	// are committed, they're sent on this channel.
@@ -40,11 +41,16 @@ func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVS
 	gob.Register(Command{})
 	commitChan := make(chan raft.CommitEntry)
 
-	rs := raft.NewServer(id, peerIds, storage, readyChan, commitChan)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})).With("component", "kv", "id", id)
+
+	rs := raft.NewServer(id, peerIds, storage, readyChan, (chan<- raft.CommitEntry)(commitChan), logger)
 	rs.Serve()
 	kvs := &KVService{
 		id:                     id,
 		rs:                     rs,
+		logger:                 logger,
 		commitChan:             commitChan,
 		ds:                     NewDataStore(),
 		commitSubs:             make(map[int]chan Command),
@@ -75,7 +81,7 @@ func (kvs *KVService) ServeHTTP(port int) {
 	}
 
 	go func() {
-		kvs.kvlog("serving HTTP on %s", kvs.srv.Addr)
+		kvs.logger.Info("serving HTTP", "addr", kvs.srv.Addr)
 		if err := kvs.srv.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -84,17 +90,17 @@ func (kvs *KVService) ServeHTTP(port int) {
 }
 
 func (kvs *KVService) Shutdown() error {
-	kvs.kvlog("shutting down Raft server")
+	kvs.logger.Debug("shutting down Raft server")
 	kvs.rs.Shutdown()
-	kvs.kvlog("closing commitChan")
+	kvs.logger.Debug("closing commitChan")
 	close(kvs.commitChan)
 
 	if kvs.srv != nil {
-		kvs.kvlog("shutting down HTTP server")
+		kvs.logger.Debug("shutting down HTTP server")
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 		kvs.srv.Shutdown(ctx)
-		kvs.kvlog("HTTP shutdown complete")
+		kvs.logger.Debug("HTTP shutdown complete")
 		return nil
 	}
 
@@ -110,7 +116,7 @@ func (kvs *KVService) sendHTTPResponse(w http.ResponseWriter, v any) {
 		kvs.delayNextHTTPResponse.Store(false)
 		time.Sleep(300 * time.Millisecond)
 	}
-	kvs.kvlog("sending response %#v", v)
+	kvs.logger.Debug("sending response", "value", fmt.Sprintf("%#v", v))
 	renderJSON(w, v)
 }
 
@@ -120,7 +126,7 @@ func (kvs *KVService) handlePut(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	kvs.kvlog("HTTP PUT %v", pr)
+	kvs.logger.Debug("HTTP PUT", "request", pr)
 
 	// Submit a command into the Raft server; this is the state change in the
 	// replicated state machine built on top of the Raft log.
@@ -132,15 +138,15 @@ func (kvs *KVService) handlePut(w http.ResponseWriter, req *http.Request) {
 		ClientID:  pr.ClientID,
 		RequestID: pr.RequestID,
 	}
-	logIndex := kvs.rs.Submit(cmd)
+	result := kvs.rs.Submit(cmd)
 	// If we're not the Raft leader, send an appropriate status
-	if logIndex < 0 {
+	if result.Index < 0 {
 		kvs.sendHTTPResponse(w, api.PutResponse{RespStatus: api.StatusNotLeader})
 		return
 	}
 
 	// Subscribe for a commit update for our log index
-	sub := kvs.createCommitSubscription(logIndex)
+	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
 	case commitCmd := <-sub:
@@ -173,7 +179,7 @@ func (kvs *KVService) handleAppend(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	kvs.kvlog("HTTP APPEND %v", ar)
+	kvs.logger.Debug("HTTP APPEND", "request", ar)
 
 	cmd := Command{
 		Kind:      CommandAppend,
@@ -183,13 +189,13 @@ func (kvs *KVService) handleAppend(w http.ResponseWriter, req *http.Request) {
 		ClientID:  ar.ClientID,
 		RequestID: ar.RequestID,
 	}
-	logIndex := kvs.rs.Submit(cmd)
-	if logIndex < 0 {
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
 		kvs.sendHTTPResponse(w, api.AppendResponse{RespStatus: api.StatusNotLeader})
 		return
 	}
 
-	sub := kvs.createCommitSubscription(logIndex)
+	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
 	case commitCmd := <-sub:
@@ -219,7 +225,7 @@ func (kvs *KVService) handleGet(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	kvs.kvlog("HTTP GET %v", gr)
+	kvs.logger.Debug("HTTP GET", "request", gr)
 
 	cmd := Command{
 		Kind:      CommandGet,
@@ -228,13 +234,13 @@ func (kvs *KVService) handleGet(w http.ResponseWriter, req *http.Request) {
 		ClientID:  gr.ClientID,
 		RequestID: gr.RequestID,
 	}
-	logIndex := kvs.rs.Submit(cmd)
-	if logIndex < 0 {
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
 		kvs.sendHTTPResponse(w, api.GetResponse{RespStatus: api.StatusNotLeader})
 		return
 	}
 
-	sub := kvs.createCommitSubscription(logIndex)
+	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
 	case commitCmd := <-sub:
@@ -264,7 +270,7 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	kvs.kvlog("HTTP CAS %v", cr)
+	kvs.logger.Debug("HTTP CAS", "request", cr)
 
 	cmd := Command{
 		Kind:         CommandCAS,
@@ -275,13 +281,13 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 		ClientID:     cr.ClientID,
 		RequestID:    cr.RequestID,
 	}
-	logIndex := kvs.rs.Submit(cmd)
-	if logIndex < 0 {
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
 		kvs.sendHTTPResponse(w, api.CASResponse{RespStatus: api.StatusNotLeader})
 		return
 	}
 
-	sub := kvs.createCommitSubscription(logIndex)
+	sub := kvs.createCommitSubscription(result.Index)
 
 	select {
 	case commitCmd := <-sub:
@@ -313,7 +319,7 @@ func (kvs *KVService) runUpdater() {
 			// Duplicate command detection.
 			lastReqID, ok := kvs.lastRequestIDPerClient[cmd.ClientID]
 			if ok && lastReqID >= cmd.RequestID {
-				kvs.kvlog("duplicate request id=%v, from client id=%v", cmd.RequestID, cmd.ClientID)
+				kvs.logger.Debug("duplicate request", "requestID", cmd.RequestID, "clientID", cmd.ClientID)
 				cmd = Command{
 					Kind:        cmd.Kind,
 					IsDuplicate: true,
@@ -363,13 +369,6 @@ func (kvs *KVService) popCommitSubscription(logIndex int) chan Command {
 	ch := kvs.commitSubs[logIndex]
 	delete(kvs.commitSubs, logIndex)
 	return ch
-}
-
-func (kvs *KVService) kvlog(format string, args ...any) {
-	if DebugKV > 0 {
-		format = fmt.Sprintf("[kv %d] ", kvs.id) + format
-		log.Printf(format, args...)
-	}
 }
 
 // The following functions exist for testing purposes, to simulate faults.
