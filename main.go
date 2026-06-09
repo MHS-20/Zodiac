@@ -47,19 +47,35 @@ func main() {
 
 	knownPeers := kvs.KnownPeers()
 	connected := make(map[int]bool)
+
 	connect := func(id int, raftAddrStr string) {
 		if id == cfg.NodeID || connected[id] {
 			return
 		}
-		raftAddr, err := net.ResolveTCPAddr("tcp", raftAddrStr)
-		if err != nil {
-			logger.Warn("resolve peer address", "peer", id, "addr", raftAddrStr, "err", err)
-			return
-		}
-		if err := kvs.ConnectToRaftPeer(id, raftAddr); err != nil {
-			logger.Warn("connect to peer", "peer", id, "err", err)
-			return
-		}
+		go func(peerID int, addr string) {
+			backoff := 100 * time.Millisecond
+			const maxBackoff = 2 * time.Second
+			deadline := time.Now().Add(30 * time.Second)
+
+			for time.Now().Before(deadline) {
+				raftAddr, err := net.ResolveTCPAddr("tcp", addr)
+				if err != nil {
+					logger.Debug("resolve peer", "peer", peerID, "err", err)
+					time.Sleep(backoff)
+					backoff = min(backoff*2, maxBackoff)
+					continue
+				}
+				if err := kvs.ConnectToRaftPeer(peerID, raftAddr); err != nil {
+					logger.Debug("connect peer", "peer", peerID, "err", err)
+					time.Sleep(backoff)
+					backoff = min(backoff*2, maxBackoff)
+					continue
+				}
+				logger.Info("connected to peer", "peer", peerID)
+				return
+			}
+			logger.Warn("giving up on peer connection", "peer", peerID)
+		}(id, raftAddrStr)
 		connected[id] = true
 	}
 

@@ -1,0 +1,61 @@
+services:
+  zodiac-1: &node
+    build:
+      context: ../../
+      dockerfile: Zodiac/deploy/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      NODE_ID: 1
+      HTTP_PORT: 8000
+      RAFT_LISTEN_ADDR: ":9000"
+      DATA_DIR: /data
+      CLUSTER: '[{"id":1,"http_addr":"zodiac-1:8000","raft_addr":"zodiac-1:9000"},{"id":2,"http_addr":"zodiac-2:8000","raft_addr":"zodiac-2:9000"},{"id":3,"http_addr":"zodiac-3:8000","raft_addr":"zodiac-3:9000"}]'
+    volumes:
+      - data-1:/data
+
+  zodiac-2:
+    <<: *node
+    ports:
+      - "8002:8000"
+    environment:
+      NODE_ID: 2
+      HTTP_PORT: 8000
+      RAFT_LISTEN_ADDR: ":9000"
+      DATA_DIR: /data
+      CLUSTER: '[{"id":1,"http_addr":"zodiac-1:8000","raft_addr":"zodiac-1:9000"},{"id":2,"http_addr":"zodiac-2:8000","raft_addr":"zodiac-2:9000"},{"id":3,"http_addr":"zodiac-3:8000","raft_addr":"zodiac-3:9000"}]'
+    volumes:
+      - data-2:/data
+
+  zodiac-3:
+    <<: *node
+    ports:
+      - "8003:8000"
+    environment:
+      NODE_ID: 3
+      HTTP_PORT: 8000
+      RAFT_LISTEN_ADDR: ":9000"
+      DATA_DIR: /data
+      CLUSTER: '[{"id":1,"http_addr":"zodiac-1:8000","raft_addr":"zodiac-1:9000"},{"id":2,"http_addr":"zodiac-2:8000","raft_addr":"zodiac-2:9000"},{"id":3,"http_addr":"zodiac-3:8000","raft_addr":"zodiac-3:9000"}]'
+    volumes:
+      - data-3:/data
+
+  client:
+    <<: *node
+    ports: []
+    entrypoint: ["/bin/sh"]
+    command: ["/test.sh"]
+    environment:
+      CLUSTER: '[{"id":1,"http_addr":"zodiac-1:8000","raft_addr":"zodiac-1:9000"},{"id":2,"http_addr":"zodiac-2:8000","raft_addr":"zodiac-2:9000"},{"id":3,"http_addr":"zodiac-3:8000","raft_addr":"zodiac-3:9000"}]'
+    depends_on:
+      zodiac-1:
+        condition: service_started
+      zodiac-2:
+        condition: service_started
+      zodiac-3:
+        condition: service_started
+
+volumes:
+  data-1:
+  data-2:
+  data-3:
