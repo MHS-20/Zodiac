@@ -18,6 +18,37 @@ Distributed, strongly consistent key-value store built on a custom implementatio
 
 All KV operations are submitted as Raft log entries. The leader proposes the entry, a majority of nodes replicate it, and once committed the entry is applied to the state machine on every node. The response is sent to the caller only after local application.
 
+## Linearizability
+
+Zodiac provides **strict linearizability** for all operations:
+
+1. Every operation is proposed as a Raft log entry and committed by a majority.
+2. The response is sent to the client **only after** the entry is applied to the local state machine.
+3. Duplicate detection ensures that client retries (due to timeouts, leader crashes, or delayed responses) never apply the same mutation twice.
+4. Snapshot serialisation includes the deduplication table, so correctness holds across restarts.
+
+This means once `Put` returns success, every subsequent `Get` (on any node, after any leader change) returns the written value.
+
+## Snapshotting
+
+After every 100 committed entries, the leader serialises its state (key-value map + deduplication table) into a **snapshot** using Go's `gob` encoding. The snapshot compacts the Raft log and is used to efficiently bring new or lagging followers up to date.
+
+Snapshot tests verify:
+
+- Leader crash + restart with snapshot recovery
+- Isolated follower catching up via snapshot installation
+- Multiple snapshot rounds (successive snapshots supersede earlier ones)
+- Deduplication table survives snapshot cycles
+
+## Membership changes
+
+Nodes join and leave at runtime through `POST /join/` and `POST /leave/` on the leader:
+
+1. The joining node connects its Raft layer to the leader.
+2. The leader proposes a `ConfigChange` (add node / remove node) through the Raft log.
+3. Once committed, every node updates its peer list and persists it to storage.
+4. A re-joining node restores its peer address book from storage and reconnects.
+
 ## Quick start
 
 ### Prerequisites
@@ -268,37 +299,6 @@ Node status and leadership information.
 ```
 
 Full list of cluster members with their HTTP addresses.
-
-## Linearizability
-
-Zodiac provides **strict linearizability** for all operations:
-
-1. Every operation is proposed as a Raft log entry and committed by a majority.
-2. The response is sent to the client **only after** the entry is applied to the local state machine.
-3. Duplicate detection ensures that client retries (due to timeouts, leader crashes, or delayed responses) never apply the same mutation twice.
-4. Snapshot serialisation includes the deduplication table, so correctness holds across restarts.
-
-This means once `Put` returns success, every subsequent `Get` (on any node, after any leader change) returns the written value.
-
-## Snapshotting
-
-After every 100 committed entries, the leader serialises its state (key-value map + deduplication table) into a **snapshot** using Go's `gob` encoding. The snapshot compacts the Raft log and is used to efficiently bring new or lagging followers up to date.
-
-Snapshot tests verify:
-
-- Leader crash + restart with snapshot recovery
-- Isolated follower catching up via snapshot installation
-- Multiple snapshot rounds (successive snapshots supersede earlier ones)
-- Deduplication table survives snapshot cycles
-
-## Membership changes
-
-Nodes join and leave at runtime through `POST /join/` and `POST /leave/` on the leader:
-
-1. The joining node connects its Raft layer to the leader.
-2. The leader proposes a `ConfigChange` (add node / remove node) through the Raft log.
-3. Once committed, every node updates its peer list and persists it to storage.
-4. A re-joining node restores its peer address book from storage and reconnects.
 
 ## Tests
 
