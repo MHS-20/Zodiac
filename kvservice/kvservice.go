@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MHS-20/Raft/raft/"
+	"github.com/MHS-20/Raft/raft"
 	"github.com/MHS-20/Zodiac/api"
 )
 
