@@ -10,4 +10,4 @@ cat > /config.json <<EOF
 }
 EOF
 
-exec /zodiac /config.json
+exec /zodiacServer /config.json

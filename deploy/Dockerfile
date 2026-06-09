@@ -7,7 +7,7 @@ COPY Zodiac/  /build/zodiac/
 WORKDIR /build/zodiac
 RUN go mod edit -replace github.com/MHS-20/Raft=/build/raft && \
     go mod tidy
-RUN CGO_ENABLED=0 go build -o /zodiac ./cmd/zodiac/
+RUN CGO_ENABLED=0 go build -o /zodiacServer ./cmd/zodiacServer/
 
 FROM alpine:3.20
 RUN apk add --no-cache curl jq
