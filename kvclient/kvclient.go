@@ -18,10 +18,13 @@ const DebugClient = 1
 type KVClient struct {
 	addrs []string
 
-	// assumedLeader is the index (in addrs) of the service we assume is the
+	// index of the service we assume is the current leader
 	assumedLeader int
+	clientID      int64
 
-	clientID int32
+	// each client manages its own requestID, and increments it monotonically and
+	// atomically each time the user asks to send a new request.
+	requestID atomic.Int64
 }
 
 func New(serviceAddrs []string) *KVClient {
@@ -32,22 +35,39 @@ func New(serviceAddrs []string) *KVClient {
 	}
 }
 
-// used internally for debugging
-var clientCount atomic.Int32
+var clientCount atomic.Int64
 
 func (c *KVClient) Put(ctx context.Context, key string, value string) (string, bool, error) {
+	// The unique ID within each request helps the service de-duplicate requests that may
+	// arrive multiple times due to network issues and client retries.
 	putReq := api.PutRequest{
-		Key:   key,
-		Value: value,
+		Key:       key,
+		Value:     value,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
 	}
 	var putResp api.PutResponse
 	err := c.send(ctx, "put", putReq, &putResp)
 	return putResp.PrevValue, putResp.KeyFound, err
 }
 
+func (c *KVClient) Append(ctx context.Context, key string, value string) (string, bool, error) {
+	appendReq := api.AppendRequest{
+		Key:       key,
+		Value:     value,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var appendResp api.AppendResponse
+	err := c.send(ctx, "append", appendReq, &appendResp)
+	return appendResp.PrevValue, appendResp.KeyFound, err
+}
+
 func (c *KVClient) Get(ctx context.Context, key string) (string, bool, error) {
 	getReq := api.GetRequest{
-		Key: key,
+		Key:       key,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
 	}
 	var getResp api.GetResponse
 	err := c.send(ctx, "get", getReq, &getResp)
@@ -59,19 +79,19 @@ func (c *KVClient) CAS(ctx context.Context, key string, compare string, value st
 		Key:          key,
 		CompareValue: compare,
 		Value:        value,
+		ClientID:     c.clientID,
+		RequestID:    c.requestID.Add(1),
 	}
 	var casResp api.CASResponse
 	err := c.send(ctx, "cas", casReq, &casResp)
 	return casResp.PrevValue, casResp.KeyFound, err
 }
 
-// This loop rotates through the list of service addresses until we get
-// a response that indicates we've found the leader of the cluster
 func (c *KVClient) send(ctx context.Context, route string, req any, resp api.Response) error {
+	// This loop rotates through the list of service addresses until we get
+	// a response that indicates we've found the leader of the cluster
 FindLeader:
 	for {
-		// There's a two-level context tree here: we have the user context - ctx,
-		// and we create our own context to impose a timeout on each request to the service
 		retryCtx, retryCtxCancel := context.WithTimeout(ctx, 50*time.Millisecond)
 		path := fmt.Sprintf("http://%s/%s/", c.addrs[c.assumedLeader], route)
 
@@ -82,7 +102,7 @@ FindLeader:
 				retryCtxCancel()
 				return err
 			} else if contextDeadlineExceeded(retryCtx) {
-				// try another server
+				// retry a different service.
 				c.clientlog("timed out: will try next address")
 				c.assumedLeader = (c.assumedLeader + 1) % len(c.addrs)
 				retryCtxCancel()
@@ -106,6 +126,9 @@ FindLeader:
 		case api.StatusFailedCommit:
 			retryCtxCancel()
 			return fmt.Errorf("commit failed; please retry")
+		case api.StatusDuplicateRequest:
+			retryCtxCancel()
+			return fmt.Errorf("this request was already completed")
 		default:
 			panic("unreachable")
 		}

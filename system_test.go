@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -67,6 +68,29 @@ func TestPutPrevValue(t *testing.T) {
 	}
 }
 
+func TestBasicAppendSameClient(t *testing.T) {
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+	h.CheckPut(c1, "foo", "bar")
+
+	// Append to a key that existed
+	prev, found := h.CheckAppend(c1, "foo", "baz")
+	if !found || prev != "bar" {
+		t.Errorf(`got found=%v, prev=%v, want true/"foo"`, found, prev)
+	}
+	h.CheckGet(c1, "foo", "barbaz")
+
+	// Append to a key that didn't exist
+	prev, found = h.CheckAppend(c1, "mix", "match")
+	if found || prev != "" {
+		t.Errorf(`got found=%v, prev=%v, want false/""`, found, prev)
+	}
+	h.CheckGet(c1, "mix", "match")
+}
+
 func TestBasicPutGetDifferentClients(t *testing.T) {
 	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
 
@@ -80,6 +104,55 @@ func TestBasicPutGetDifferentClients(t *testing.T) {
 	c2 := h.NewClient()
 	h.CheckGet(c2, "k", "v")
 	sleepMs(80)
+}
+
+func TestBasicAppendDifferentClients(t *testing.T) {
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+	h.CheckPut(c1, "foo", "bar")
+
+	// Append to a key that existed
+	c2 := h.NewClient()
+	prev, found := h.CheckAppend(c2, "foo", "baz")
+	if !found || prev != "bar" {
+		t.Errorf(`got found=%v, prev=%v, want true/"foo"`, found, prev)
+	}
+	h.CheckGet(c1, "foo", "barbaz")
+
+	// Append to a key that didn't exist
+	prev, found = h.CheckAppend(c2, "mix", "match")
+	if found || prev != "" {
+		t.Errorf(`got found=%v, prev=%v, want false/""`, found, prev)
+	}
+	h.CheckGet(c1, "mix", "match")
+}
+
+func TestAppendDifferentLeaders(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	lid := h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+	h.CheckAppend(c1, "foo", "bar")
+	h.CheckGet(c1, "foo", "bar")
+
+	// Crash a leader and wait for the cluster to establish a new leader.
+	h.CrashService(lid)
+	h.CheckSingleLeader()
+
+	c2 := h.NewClient()
+	h.CheckAppend(c2, "foo", "baz")
+	h.CheckGet(c2, "foo", "barbaz")
+
+	h.RestartService(lid)
+	c3 := h.NewClient()
+	sleepMs(300)
+	h.CheckGet(c3, "foo", "barbaz")
 }
 
 func TestCASBasic(t *testing.T) {
@@ -374,4 +447,64 @@ func TestCrashThenRestartLeader(t *testing.T) {
 			h.CheckGet(c, fmt.Sprintf("key%v", j), fmt.Sprintf("value%v", j))
 		}
 	}
+}
+
+func TestAppendLinearizableAfterDelay(t *testing.T) {
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	lid := h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+
+	// A sequence of put+append, check we get the right result.
+	h.CheckPut(c1, "foo", "bar")
+	h.CheckAppend(c1, "foo", "baz")
+	h.CheckGet(c1, "foo", "barbaz")
+
+	// Ask the service to delay the response to the next request, and send
+	// an append. The client will retry this append, so the system has to be
+	// resilient to this. It will report a duplicate because of the retries,
+	// but the append will be applied successfully.
+	h.DelayNextHTTPResponseFromService(lid)
+
+	_, _, err := c1.Append(context.Background(), "foo", "mira")
+	if err == nil {
+		t.Errorf("got no error, want duplicate")
+	}
+
+	// Make sure the append was applied successfully, and just once.
+	sleepMs(300)
+	h.CheckGet(c1, "foo", "barbazmira")
+}
+
+func TestAppendLinearizableAfterCrash(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	lid := h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+
+	h.CheckAppend(c1, "foo", "bar")
+	h.CheckGet(c1, "foo", "bar")
+
+	// Delay response from the leader and then crash it. When a new leader is
+	// selected, we expect to see one append committed (but only one!)
+	h.DelayNextHTTPResponseFromService(lid)
+	go func() {
+		ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
+		defer cancel()
+		_, _, err := c1.Append(ctx, "foo", "mira")
+		if err == nil {
+			t.Errorf("got no error; want error")
+		}
+		tlog("received err: %v", err)
+	}()
+
+	sleepMs(50)
+	h.CrashService(lid)
+	h.CheckSingleLeader()
+	c2 := h.NewClient()
+	h.CheckGet(c2, "foo", "barmira")
 }
