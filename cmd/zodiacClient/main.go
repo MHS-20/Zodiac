@@ -15,6 +15,7 @@ func main() {
 	var (
 		addrs    = flag.String("addr", "localhost:8000", "comma-separated server addresses")
 		discover = flag.Bool("discover", false, "discover cluster members from seed addresses")
+		verbose  = flag.Bool("v", false, "verbose output including revision")
 		timeout  = flag.Duration("timeout", 5*time.Second, "request timeout")
 	)
 	flag.Parse()
@@ -45,61 +46,81 @@ func main() {
 		if len(args) < 1 {
 			log.Fatal("Usage: zodiac-client get <key>")
 		}
-		val, found, err := c.Get(ctx, args[0])
+		val, found, rev, err := c.Get(ctx, args[0])
 		if err != nil {
 			log.Fatal(err)
 		}
 		if !found {
 			os.Exit(1)
 		}
-		fmt.Println(val)
+		if *verbose {
+			fmt.Printf("%s (rev=%d)\n", val, rev)
+		} else {
+			fmt.Println(val)
+		}
 
 	case "put":
 		if len(args) < 2 {
 			log.Fatal("Usage: zodiac-client put <key> <value>")
 		}
-		prev, found, err := c.Put(ctx, args[0], args[1])
+		prev, found, rev, err := c.Put(ctx, args[0], args[1])
 		if err != nil {
 			log.Fatal(err)
 		}
 		if found {
-			fmt.Println(prev)
+			if *verbose {
+				fmt.Printf("%s (rev=%d)\n", prev, rev)
+			} else {
+				fmt.Println(prev)
+			}
 		}
 
 	case "append":
 		if len(args) < 2 {
 			log.Fatal("Usage: zodiac-client append <key> <value>")
 		}
-		prev, found, err := c.Append(ctx, args[0], args[1])
+		prev, found, rev, err := c.Append(ctx, args[0], args[1])
 		if err != nil {
 			log.Fatal(err)
 		}
 		if found {
-			fmt.Println(prev)
+			if *verbose {
+				fmt.Printf("%s (rev=%d)\n", prev, rev)
+			} else {
+				fmt.Println(prev)
+			}
 		}
 
 	case "cas":
 		if len(args) < 3 {
 			log.Fatal("Usage: zodiac-client cas <key> <compare> <value>")
 		}
-		prev, found, err := c.CAS(ctx, args[0], args[1], args[2])
+		prev, found, rev, err := c.CAS(ctx, args[0], args[1], args[2])
 		if err != nil {
 			log.Fatal(err)
 		}
 		if found {
-			fmt.Println(prev)
+			if *verbose {
+				fmt.Printf("%s (rev=%d)\n", prev, rev)
+			} else {
+				fmt.Println(prev)
+			}
 		}
 
 	case "list":
 		if len(args) < 1 {
 			log.Fatal("Usage: zodiac-client list <prefix>")
 		}
-		pairs, err := c.List(ctx, args[0])
+		pairs, rev, err := c.List(ctx, args[0])
 		if err != nil {
 			log.Fatal(err)
 		}
 		for k, v := range pairs {
-			fmt.Printf("%s: %s\n", k, v)
+			if *verbose {
+				fmt.Printf("%s: %s (rev=%d)\n", k, v, rev)
+			} else {
+				fmt.Printf("%s: %s\n", k, v)
+			}
 		}
 
 	default:

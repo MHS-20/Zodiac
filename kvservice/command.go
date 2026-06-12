@@ -15,6 +15,7 @@ type Command struct {
 	ServiceID           int
 	ClientID, RequestID int64
 	IsDuplicate         bool
+	Revision            int64
 }
 
 type CommandKind int

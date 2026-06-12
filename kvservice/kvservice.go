@@ -30,6 +30,7 @@ const (
 type kvSnapshot struct {
 	Store                  map[string]string
 	LastRequestIDPerClient map[int64]int64
+	CurrentRevision        int64
 }
 
 // peerInfo tracks the addresses of a cluster peer for reconnection and discovery.
@@ -62,6 +63,7 @@ type KVService struct {
 	ds                     *DataStore
 	srv                    *http.Server
 	lastRequestIDPerClient map[int64]int64
+	currentRevision        int64
 	delayNextHTTPResponse  atomic.Bool
 
 	// lastSnapshotIndex tracks the log index of the most recent snapshot so we
@@ -107,6 +109,7 @@ func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVS
 		peerIDs:                append([]int(nil), peerIds...),
 		pendingJoinAddrs:       make(map[int]peerInfo),
 		storage:                storage,
+		currentRevision:        0,
 	}
 
 	kvs.loadPeers()
@@ -225,6 +228,7 @@ func (kvs *KVService) handlePut(w http.ResponseWriter, req *http.Request) {
 					RespStatus: api.StatusOK,
 					KeyFound:   commitCmd.ResultFound,
 					PrevValue:  commitCmd.ResultValue,
+					Revision:   commitCmd.Revision,
 				})
 			}
 		} else {
@@ -277,6 +281,7 @@ func (kvs *KVService) handleAppend(w http.ResponseWriter, req *http.Request) {
 					RespStatus: api.StatusOK,
 					KeyFound:   commitCmd.ResultFound,
 					PrevValue:  commitCmd.ResultValue,
+					Revision:   commitCmd.Revision,
 				})
 			}
 		} else {
@@ -327,6 +332,7 @@ func (kvs *KVService) handleGet(w http.ResponseWriter, req *http.Request) {
 					RespStatus: api.StatusOK,
 					KeyFound:   commitCmd.ResultFound,
 					Value:      commitCmd.ResultValue,
+					Revision:   commitCmd.Revision,
 				})
 			}
 		} else {
@@ -379,6 +385,7 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 					RespStatus: api.StatusOK,
 					KeyFound:   commitCmd.ResultFound,
 					PrevValue:  commitCmd.ResultValue,
+					Revision:   commitCmd.Revision,
 				})
 			}
 		} else {
@@ -419,7 +426,7 @@ func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		if commitCmd.ServiceID == kvs.id {
-			if commitCmd.IsDuplicate {
+			if commitCmd.IsDuplicate && commitCmd.Kind != CommandList {
 				kvs.sendHTTPResponse(w, api.ListResponse{
 					RespStatus: api.StatusDuplicateRequest,
 				})
@@ -427,6 +434,7 @@ func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
 				kvs.sendHTTPResponse(w, api.ListResponse{
 					RespStatus: api.StatusOK,
 					Pairs:      commitCmd.ResultPairs,
+					Revision:   commitCmd.Revision,
 				})
 			}
 		} else {
@@ -628,6 +636,7 @@ func (kvs *KVService) encodeSnapshot() ([]byte, error) {
 	snap := kvSnapshot{
 		Store:                  kvs.ds.CopyAll(),
 		LastRequestIDPerClient: make(map[int64]int64, len(kvs.lastRequestIDPerClient)),
+		CurrentRevision:        kvs.currentRevision,
 	}
 	for k, v := range kvs.lastRequestIDPerClient {
 		snap.LastRequestIDPerClient[k] = v
@@ -704,6 +713,7 @@ func (kvs *KVService) runUpdater() {
 			kvs.Lock()
 			kvs.ds.RestoreAll(decoded.Store)
 			kvs.lastRequestIDPerClient = decoded.LastRequestIDPerClient
+			kvs.currentRevision = decoded.CurrentRevision
 			kvs.lastSnapshotIndex = snap.Index
 
 			// Cancel any pending subscriptions for indices that are now
@@ -785,14 +795,25 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value)
 		case CommandAppend:
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
-	case CommandCAS:
-		cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
-	case CommandList:
-		cmd.ResultPairs = kvs.ds.List(cmd.Key)
-	default:
+		case CommandCAS:
+			cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
+		case CommandList:
+			cmd.ResultPairs = kvs.ds.List(cmd.Key)
+		default:
 			kvs.Unlock()
 			panic(fmt.Errorf("unexpected command %v", cmd))
 		}
+	}
+
+	// Assign revision: increment on non-duplicate writes, snapshot current for reads
+	switch cmd.Kind {
+	case CommandPut, CommandAppend, CommandCAS:
+		if !cmd.IsDuplicate {
+			kvs.currentRevision++
+		}
+		cmd.Revision = kvs.currentRevision
+	default:
+		cmd.Revision = kvs.currentRevision
 	}
 
 	sub := kvs.popCommitSubscriptionLocked(index)

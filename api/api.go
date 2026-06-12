@@ -16,6 +16,7 @@ type PutResponse struct {
 	RespStatus ResponseStatus
 	KeyFound   bool
 	PrevValue  string
+	Revision   int64
 }
 
 func (pr *PutResponse) Status() ResponseStatus {
@@ -34,6 +35,7 @@ type AppendResponse struct {
 	RespStatus ResponseStatus
 	KeyFound   bool
 	PrevValue  string
+	Revision   int64
 }
 
 func (ar *AppendResponse) Status() ResponseStatus {
@@ -51,6 +53,7 @@ type GetResponse struct {
 	RespStatus ResponseStatus
 	KeyFound   bool
 	Value      string
+	Revision   int64
 }
 
 func (gr *GetResponse) Status() ResponseStatus {
@@ -70,6 +73,7 @@ type CASResponse struct {
 	RespStatus ResponseStatus
 	KeyFound   bool
 	PrevValue  string
+	Revision   int64
 }
 
 func (cr *CASResponse) Status() ResponseStatus {
@@ -103,6 +107,7 @@ type ListRequest struct {
 type ListResponse struct {
 	RespStatus ResponseStatus
 	Pairs      map[string]string
+	Revision   int64
 }
 
 func (lr *ListResponse) Status() ResponseStatus {

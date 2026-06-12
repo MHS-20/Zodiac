@@ -417,7 +417,7 @@ func TestAppendLinearizableAfterDelay(t *testing.T) {
 
 	h.DelayNextHTTPResponseFromService(lid)
 
-	_, _, err := c1.Append(context.Background(), "foo", "mira")
+	_, _, _, err := c1.Append(context.Background(), "foo", "mira")
 	if err == nil {
 		t.Errorf("got no error, want duplicate")
 	}
@@ -442,7 +442,7 @@ func TestAppendLinearizableAfterCrash(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 		defer cancel()
-		_, _, err := c1.Append(ctx, "foo", "mira")
+		_, _, _, err := c1.Append(ctx, "foo", "mira")
 		if err == nil {
 			t.Errorf("got no error; want error")
 		}
@@ -469,7 +469,7 @@ func TestListBasic(t *testing.T) {
 	h.CheckPut(c, "/nodes/2/cpu", "8")
 	h.CheckPut(c, "/pods/a", "running")
 
-	pairs, err := c.List(context.Background(), "/nodes/1/")
+	pairs, _, err := c.List(context.Background(), "/nodes/1/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,7 @@ func TestListBasic(t *testing.T) {
 		t.Errorf("got %v, want 2 entries under /nodes/1/", pairs)
 	}
 
-	pairs, err = c.List(context.Background(), "/nonexistent/")
+	pairs, _, err = c.List(context.Background(), "/nonexistent/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +501,7 @@ func TestListAcrossCluster(t *testing.T) {
 	newLid := h.CheckSingleLeader()
 
 	c2 := h.NewClientSingleService(newLid)
-	pairs, err := c2.List(context.Background(), "/nodes/")
+	pairs, _, err := c2.List(context.Background(), "/nodes/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,4 +513,122 @@ func TestListAcrossCluster(t *testing.T) {
 	}
 
 	h.RestartService(lid)
+}
+
+func TestRevisionMonotonic(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	h.CheckSingleLeader()
+
+	c := h.NewClient()
+	ctx := context.Background()
+
+	// First write gets rev=1
+	_, _, rev, err := c.Put(ctx, "a", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 1 {
+		t.Errorf("first Put got rev=%d, want 1", rev)
+	}
+
+	// Second write gets rev=2
+	_, _, rev, err = c.Put(ctx, "b", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 2 {
+		t.Errorf("second Put got rev=%d, want 2", rev)
+	}
+
+	// Append is a write, gets rev=3
+	_, _, rev, err = c.Append(ctx, "a", "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 3 {
+		t.Errorf("Append got rev=%d, want 3", rev)
+	}
+
+	// Get is a read, does NOT increment — still rev=3
+	_, _, rev, err = c.Get(ctx, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 3 {
+		t.Errorf("Get after Append got rev=%d, want 3", rev)
+	}
+
+	// Another write to verify increment continues
+	_, _, rev, err = c.Put(ctx, "c", "4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 4 {
+		t.Errorf("Put after Get got rev=%d, want 4", rev)
+	}
+
+	// List is a read, does NOT increment — still rev=4
+	_, rev2, err := c.List(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev2 != 4 {
+		t.Errorf("List got rev=%d, want 4", rev2)
+	}
+}
+
+func TestRevisionSnapshot(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	lid := h.CheckSingleLeader()
+
+	c1 := h.NewClient()
+	ctx := context.Background()
+
+	// Write entries to exceed snapshot threshold, accumulating revision
+	for i := range 110 {
+		_, _, _, err := c1.Put(ctx, fmt.Sprintf("k%d", i), fmt.Sprintf("v%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Read back a value and verify revision matches the last write
+	_, _, rev, err := c1.Get(ctx, "k0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 110 {
+		t.Errorf("before snapshot: Get rev=%d, want 110", rev)
+	}
+
+	// Crash and restart the leader to force snapshot restore
+	h.CrashService(lid)
+	_ = h.CheckSingleLeader()
+	h.RestartService(lid)
+	sleepMs(300)
+
+	// After restart, revision should be restored from snapshot
+	c2 := h.NewClient()
+	_, _, rev, err = c2.Get(ctx, "k0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 110 {
+		t.Errorf("after snapshot restart: Get rev=%d, want 110", rev)
+	}
+
+	// Further writes should continue from restored revision
+	_, _, rev, err = c2.Put(ctx, "extra", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev != 111 {
+		t.Errorf("write after snapshot restart got rev=%d, want 111", rev)
+	}
 }

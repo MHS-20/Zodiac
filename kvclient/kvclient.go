@@ -41,7 +41,7 @@ func New(serviceAddrs []string) *KVClient {
 
 var clientCount atomic.Int64
 
-func (c *KVClient) Put(ctx context.Context, key string, value string) (string, bool, error) {
+func (c *KVClient) Put(ctx context.Context, key string, value string) (string, bool, int64, error) {
 	// The unique ID within each request helps the service de-duplicate requests that may
 	// arrive multiple times due to network issues and client retries.
 	putReq := api.PutRequest{
@@ -52,10 +52,10 @@ func (c *KVClient) Put(ctx context.Context, key string, value string) (string, b
 	}
 	var putResp api.PutResponse
 	err := c.send(ctx, "put", putReq, &putResp)
-	return putResp.PrevValue, putResp.KeyFound, err
+	return putResp.PrevValue, putResp.KeyFound, putResp.Revision, err
 }
 
-func (c *KVClient) Append(ctx context.Context, key string, value string) (string, bool, error) {
+func (c *KVClient) Append(ctx context.Context, key string, value string) (string, bool, int64, error) {
 	appendReq := api.AppendRequest{
 		Key:       key,
 		Value:     value,
@@ -64,10 +64,10 @@ func (c *KVClient) Append(ctx context.Context, key string, value string) (string
 	}
 	var appendResp api.AppendResponse
 	err := c.send(ctx, "append", appendReq, &appendResp)
-	return appendResp.PrevValue, appendResp.KeyFound, err
+	return appendResp.PrevValue, appendResp.KeyFound, appendResp.Revision, err
 }
 
-func (c *KVClient) Get(ctx context.Context, key string) (string, bool, error) {
+func (c *KVClient) Get(ctx context.Context, key string) (string, bool, int64, error) {
 	getReq := api.GetRequest{
 		Key:       key,
 		ClientID:  c.clientID,
@@ -75,10 +75,10 @@ func (c *KVClient) Get(ctx context.Context, key string) (string, bool, error) {
 	}
 	var getResp api.GetResponse
 	err := c.send(ctx, "get", getReq, &getResp)
-	return getResp.Value, getResp.KeyFound, err
+	return getResp.Value, getResp.KeyFound, getResp.Revision, err
 }
 
-func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, error) {
+func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, int64, error) {
 	listReq := api.ListRequest{
 		Prefix:    prefix,
 		ClientID:  c.clientID,
@@ -86,10 +86,10 @@ func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, 
 	}
 	var listResp api.ListResponse
 	err := c.send(ctx, "list", listReq, &listResp)
-	return listResp.Pairs, err
+	return listResp.Pairs, listResp.Revision, err
 }
 
-func (c *KVClient) CAS(ctx context.Context, key string, compare string, value string) (string, bool, error) {
+func (c *KVClient) CAS(ctx context.Context, key string, compare string, value string) (string, bool, int64, error) {
 	casReq := api.CASRequest{
 		Key:          key,
 		CompareValue: compare,
@@ -99,7 +99,7 @@ func (c *KVClient) CAS(ctx context.Context, key string, compare string, value st
 	}
 	var casResp api.CASResponse
 	err := c.send(ctx, "cas", casReq, &casResp)
-	return casResp.PrevValue, casResp.KeyFound, err
+	return casResp.PrevValue, casResp.KeyFound, casResp.Revision, err
 }
 
 func (c *KVClient) send(ctx context.Context, route string, req any, resp api.Response) error {

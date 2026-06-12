@@ -224,7 +224,7 @@ func (h *Harness) CheckSingleLeader() int {
 func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
-	pv, f, err := c.Put(ctx, key, value)
+	pv, f, _, err := c.Put(ctx, key, value)
 	if err != nil {
 		h.t.Error(err)
 	}
@@ -234,7 +234,7 @@ func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, boo
 func (h *Harness) CheckAppend(c *kvclient.KVClient, key, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
-	pv, f, err := c.Append(ctx, key, value)
+	pv, f, _, err := c.Append(ctx, key, value)
 	if err != nil {
 		h.t.Error(err)
 	}
@@ -244,7 +244,7 @@ func (h *Harness) CheckAppend(c *kvclient.KVClient, key, value string) (string, 
 func (h *Harness) CheckGet(c *kvclient.KVClient, key string, wantValue string) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
-	gv, f, err := c.Get(ctx, key)
+	gv, f, _, err := c.Get(ctx, key)
 	if err != nil {
 		h.t.Error(err)
 	}
@@ -259,7 +259,7 @@ func (h *Harness) CheckGet(c *kvclient.KVClient, key string, wantValue string) {
 func (h *Harness) CheckCAS(c *kvclient.KVClient, key, compare, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
-	pv, f, err := c.CAS(ctx, key, compare, value)
+	pv, f, _, err := c.CAS(ctx, key, compare, value)
 	if err != nil {
 		h.t.Error(err)
 	}
@@ -269,7 +269,7 @@ func (h *Harness) CheckCAS(c *kvclient.KVClient, key, compare, value string) (st
 func (h *Harness) CheckGetNotFound(c *kvclient.KVClient, key string) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()
-	_, f, err := c.Get(ctx, key)
+	_, f, _, err := c.Get(ctx, key)
 	if err != nil {
 		h.t.Error(err)
 	}
@@ -281,7 +281,7 @@ func (h *Harness) CheckGetNotFound(c *kvclient.KVClient, key string) {
 func (h *Harness) CheckGetTimesOut(c *kvclient.KVClient, key string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, _, err := c.Get(ctx, key)
+	_, _, _, err := c.Get(ctx, key)
 	if err == nil || !strings.Contains(err.Error(), "deadline exceeded") {
 		h.t.Errorf("got err %v; want 'deadline exceeded'", err)
 	}
