@@ -4,7 +4,7 @@ import "testing"
 
 func checkPutPrev(t *testing.T, ds *DataStore, k string, v string, prev string, hasPrev bool) {
 	t.Helper()
-	prevVal, ok := ds.Put(k, v)
+	prevVal, ok := ds.Put(k, v, 0)
 	if hasPrev != ok || prevVal != prev {
 		t.Errorf("prevVal=%s, ok=%v; want %s,%v", prevVal, ok, prev, hasPrev)
 	}
@@ -33,12 +33,12 @@ func checkList(t *testing.T, ds *DataStore, prefix string, want map[string]strin
 
 func TestList(t *testing.T) {
 	ds := NewDataStore()
-	ds.Put("/nodes/1/cpu", "4")
-	ds.Put("/nodes/1/mem", "16")
-	ds.Put("/nodes/2/cpu", "8")
-	ds.Put("/nodes/2/mem", "32")
-	ds.Put("/pods/a", "running")
-	ds.Put("/pods/b", "pending")
+	ds.Put("/nodes/1/cpu", "4", 0)
+	ds.Put("/nodes/1/mem", "16", 0)
+	ds.Put("/nodes/2/cpu", "8", 0)
+	ds.Put("/nodes/2/mem", "32", 0)
+	ds.Put("/pods/a", "running", 0)
+	ds.Put("/pods/b", "pending", 0)
 
 	checkList(t, ds, "/nodes/1/", map[string]string{
 		"/nodes/1/cpu": "4",
@@ -86,8 +86,8 @@ func TestGetPut(t *testing.T) {
 
 func TestCASBasic(t *testing.T) {
 	ds := NewDataStore()
-	ds.Put("foo", "bar")
-	ds.Put("sun", "beam")
+	ds.Put("foo", "bar", 0)
+	ds.Put("sun", "beam", 0)
 
 	// CAS replace existing value
 	checkCAS(t, ds, "foo", "mex", "bro", "bar", true)
@@ -99,7 +99,7 @@ func TestCASBasic(t *testing.T) {
 	checkGet(t, ds, "goa", "", false)
 
 	// ... and now this key assigned
-	ds.Put("goa", "tva")
+	ds.Put("goa", "tva", 0)
 	checkCAS(t, ds, "goa", "mm", "vv", "tva", true)
 	checkCAS(t, ds, "goa", "mm", "vv", "tva", true)
 }
@@ -107,8 +107,8 @@ func TestCASBasic(t *testing.T) {
 func TestCASConcurrent(t *testing.T) {
 	// Run this with -race
 	ds := NewDataStore()
-	ds.Put("foo", "bar")
-	ds.Put("sun", "beam")
+	ds.Put("foo", "bar", 0)
+	ds.Put("sun", "beam", 0)
 
 	go func() {
 		for range 2000 {

@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,16 @@ type kvSnapshot struct {
 	Store                  map[string]string
 	LastRequestIDPerClient map[int64]int64
 	CurrentRevision        int64
+	Leases                 map[int64]leaseSnapshot
+	KeyLease               map[string]int64
+	NextLeaseID            int64
+}
+
+type leaseSnapshot struct {
+	ID        int64
+	TTL       int64
+	ExpiresAt time.Time
+	Keys      []string
 }
 
 // peerInfo tracks the addresses of a cluster peer for reconnection and discovery.
@@ -90,6 +101,8 @@ type KVService struct {
 	watchSubs map[int64]*watchSub
 	watchMu   sync.Mutex
 	watchSeq  int64
+
+	leaseExpiryCancel func()
 }
 
 func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVService {
@@ -122,6 +135,7 @@ func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVS
 
 	kvs.loadPeers()
 	kvs.runUpdater()
+	kvs.startLeaseExpiryLoop()
 	return kvs
 }
 
@@ -140,6 +154,9 @@ func (kvs *KVService) ServeHTTP(port int) {
 	mux.HandleFunc("POST /cas/", kvs.handleCAS)
 	mux.HandleFunc("POST /list/", kvs.handleList)
 	mux.HandleFunc("POST /txn/", kvs.handleTxn)
+	mux.HandleFunc("POST /lease/grant/", kvs.handleLeaseGrant)
+	mux.HandleFunc("POST /lease/keepalive/", kvs.handleLeaseKeepAlive)
+	mux.HandleFunc("POST /lease/revoke/", kvs.handleLeaseRevoke)
 	mux.HandleFunc("POST /join/", kvs.handleJoin)
 	mux.HandleFunc("POST /leave/", kvs.handleLeave)
 	mux.HandleFunc("GET /status/", kvs.handleStatus)
@@ -160,7 +177,34 @@ func (kvs *KVService) ServeHTTP(port int) {
 	}()
 }
 
+func (kvs *KVService) startLeaseExpiryLoop() {
+	ctx, cancel := context.WithCancel(context.Background())
+	kvs.leaseExpiryCancel = cancel
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				leaseIDs := kvs.ds.CheckExpiredLeases()
+				if len(leaseIDs) == 0 {
+					continue
+				}
+				kvs.rs.Submit(Command{
+					Kind:     CommandLeaseExpiry,
+					LeaseIDs: leaseIDs,
+				})
+			}
+		}
+	}()
+}
+
 func (kvs *KVService) Shutdown() error {
+	if kvs.leaseExpiryCancel != nil {
+		kvs.leaseExpiryCancel()
+	}
 	kvs.logger.Debug("shutting down Raft server")
 	kvs.rs.Shutdown()
 	kvs.logger.Debug("closing commitChan")
@@ -205,6 +249,7 @@ func (kvs *KVService) handlePut(w http.ResponseWriter, req *http.Request) {
 		Kind:      CommandPut,
 		Key:       pr.Key,
 		Value:     pr.Value,
+		LeaseID:   pr.LeaseID,
 		ServiceID: kvs.id,
 		ClientID:  pr.ClientID,
 		RequestID: pr.RequestID,
@@ -509,6 +554,156 @@ func (kvs *KVService) handleTxn(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func (kvs *KVService) handleLeaseGrant(w http.ResponseWriter, req *http.Request) {
+	lr := &api.LeaseGrantRequest{}
+	if err := readRequestJSON(req, lr); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kvs.logger.Debug("HTTP LEASE GRANT", "request", lr)
+
+	cmd := Command{
+		Kind:      CommandLeaseGrant,
+		LeaseTTL:  lr.TTL,
+		ServiceID: kvs.id,
+		ClientID:  lr.ClientID,
+		RequestID: lr.RequestID,
+	}
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
+		kvs.sendHTTPResponse(w, api.LeaseGrantResponse{RespStatus: api.StatusNotLeader})
+		return
+	}
+
+	sub := kvs.createCommitSubscription(result.Index)
+
+	select {
+	case commitCmd, ok := <-sub:
+		if !ok {
+			kvs.sendHTTPResponse(w, api.LeaseGrantResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
+		if commitCmd.ServiceID == kvs.id {
+			if commitCmd.IsDuplicate {
+				kvs.sendHTTPResponse(w, api.LeaseGrantResponse{
+					RespStatus: api.StatusDuplicateRequest,
+				})
+			} else {
+				id, _ := strconv.ParseInt(commitCmd.ResultValue, 10, 64)
+				kvs.sendHTTPResponse(w, api.LeaseGrantResponse{
+					RespStatus: api.StatusOK,
+					ID:         id,
+					TTL:        lr.TTL,
+				})
+			}
+		} else {
+			kvs.sendHTTPResponse(w, api.LeaseGrantResponse{RespStatus: api.StatusFailedCommit})
+		}
+	case <-req.Context().Done():
+		return
+	}
+}
+
+func (kvs *KVService) handleLeaseKeepAlive(w http.ResponseWriter, req *http.Request) {
+	lkr := &api.LeaseKeepAliveRequest{}
+	if err := readRequestJSON(req, lkr); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kvs.logger.Debug("HTTP LEASE KEEPALIVE", "request", lkr)
+
+	cmd := Command{
+		Kind:      CommandLeaseKeepAlive,
+		LeaseID:   lkr.ID,
+		ServiceID: kvs.id,
+		ClientID:  lkr.ClientID,
+		RequestID: lkr.RequestID,
+	}
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
+		kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{RespStatus: api.StatusNotLeader})
+		return
+	}
+
+	sub := kvs.createCommitSubscription(result.Index)
+
+	select {
+	case commitCmd, ok := <-sub:
+		if !ok {
+			kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
+		if commitCmd.ServiceID == kvs.id {
+			if commitCmd.IsDuplicate {
+				kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{
+					RespStatus: api.StatusDuplicateRequest,
+				})
+			} else if commitCmd.ResultFound {
+				kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{
+					RespStatus: api.StatusOK,
+					ID:         lkr.ID,
+				})
+			} else {
+				kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{
+					RespStatus: api.StatusOK,
+					ID:         lkr.ID,
+				})
+			}
+		} else {
+			kvs.sendHTTPResponse(w, api.LeaseKeepAliveResponse{RespStatus: api.StatusFailedCommit})
+		}
+	case <-req.Context().Done():
+		return
+	}
+}
+
+func (kvs *KVService) handleLeaseRevoke(w http.ResponseWriter, req *http.Request) {
+	lrr := &api.LeaseRevokeRequest{}
+	if err := readRequestJSON(req, lrr); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kvs.logger.Debug("HTTP LEASE REVOKE", "request", lrr)
+
+	cmd := Command{
+		Kind:      CommandLeaseRevoke,
+		LeaseID:   lrr.ID,
+		ServiceID: kvs.id,
+		ClientID:  lrr.ClientID,
+		RequestID: lrr.RequestID,
+	}
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
+		kvs.sendHTTPResponse(w, api.LeaseRevokeResponse{RespStatus: api.StatusNotLeader})
+		return
+	}
+
+	sub := kvs.createCommitSubscription(result.Index)
+
+	select {
+	case commitCmd, ok := <-sub:
+		if !ok {
+			kvs.sendHTTPResponse(w, api.LeaseRevokeResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
+		if commitCmd.ServiceID == kvs.id {
+			if commitCmd.IsDuplicate {
+				kvs.sendHTTPResponse(w, api.LeaseRevokeResponse{
+					RespStatus: api.StatusDuplicateRequest,
+				})
+			} else {
+				kvs.sendHTTPResponse(w, api.LeaseRevokeResponse{
+					RespStatus: api.StatusOK,
+				})
+			}
+		} else {
+			kvs.sendHTTPResponse(w, api.LeaseRevokeResponse{RespStatus: api.StatusFailedCommit})
+		}
+	case <-req.Context().Done():
+		return
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Admin / cluster management HTTP handlers
 // ---------------------------------------------------------------------------
@@ -697,10 +892,14 @@ func (kvs *KVService) SetLocalHTTPAddr(addr string) {
 // for passing to raft.Server.InstallSnapshot.
 // Must be called with kvs.Lock held.
 func (kvs *KVService) encodeSnapshot() ([]byte, error) {
+	leases, keyLease, nextLeaseID := kvs.ds.GetLeaseSnapshot()
 	snap := kvSnapshot{
 		Store:                  kvs.ds.CopyAll(),
 		LastRequestIDPerClient: make(map[int64]int64, len(kvs.lastRequestIDPerClient)),
 		CurrentRevision:        kvs.currentRevision,
+		Leases:                 leases,
+		KeyLease:               keyLease,
+		NextLeaseID:            nextLeaseID,
 	}
 	for k, v := range kvs.lastRequestIDPerClient {
 		snap.LastRequestIDPerClient[k] = v
@@ -776,6 +975,7 @@ func (kvs *KVService) runUpdater() {
 
 			kvs.Lock()
 			kvs.ds.RestoreAll(decoded.Store)
+			kvs.ds.RestoreFromLeaseSnapshot(decoded.Leases, decoded.KeyLease, decoded.NextLeaseID)
 			kvs.lastRequestIDPerClient = decoded.LastRequestIDPerClient
 			kvs.currentRevision = decoded.CurrentRevision
 			kvs.lastSnapshotIndex = snap.Index
@@ -841,7 +1041,7 @@ func (kvs *KVService) runUpdater() {
 func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 	kvs.Lock()
 	lastReqID, exists := kvs.lastRequestIDPerClient[cmd.ClientID]
-	if exists && lastReqID >= cmd.RequestID {
+	if cmd.ClientID != 0 && exists && lastReqID >= cmd.RequestID {
 		kvs.logger.Debug("duplicate request", "requestID", cmd.RequestID, "clientID", cmd.ClientID)
 		if cmd.Kind == CommandGet {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
@@ -850,13 +1050,15 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 		}
 		cmd.IsDuplicate = true
 	} else {
-		kvs.lastRequestIDPerClient[cmd.ClientID] = cmd.RequestID
+		if cmd.ClientID != 0 {
+			kvs.lastRequestIDPerClient[cmd.ClientID] = cmd.RequestID
+		}
 
 		switch cmd.Kind {
 		case CommandGet:
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
 		case CommandPut:
-			cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value)
+			cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value, cmd.LeaseID)
 		case CommandAppend:
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
 		case CommandCAS:
@@ -866,6 +1068,27 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 			cmd.TxnResult = &TxnApplyResult{Succeeded: succeeded, Results: results}
 		case CommandList:
 			cmd.ResultPairs = kvs.ds.List(cmd.Key)
+		case CommandLeaseGrant:
+			id := kvs.ds.GrantLease(cmd.LeaseTTL)
+			cmd.ResultValue = strconv.FormatInt(id, 10)
+		case CommandLeaseKeepAlive:
+			cmd.ResultFound = kvs.ds.KeepAliveLease(cmd.LeaseID)
+		case CommandLeaseRevoke:
+			deletedKeys := kvs.ds.RevokeLease(cmd.LeaseID)
+			cmd.ResultPairs = make(map[string]string, len(deletedKeys))
+			for _, k := range deletedKeys {
+				cmd.ResultPairs[k] = ""
+			}
+		case CommandLeaseExpiry:
+			for _, id := range cmd.LeaseIDs {
+				deletedKeys := kvs.ds.RevokeLease(id)
+				if cmd.ResultPairs == nil {
+					cmd.ResultPairs = make(map[string]string)
+				}
+				for _, k := range deletedKeys {
+					cmd.ResultPairs[k] = ""
+				}
+			}
 		default:
 			kvs.Unlock()
 			panic(fmt.Errorf("unexpected command %v", cmd))
@@ -874,7 +1097,7 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 
 	// Assign revision: increment on non-duplicate writes, snapshot current for reads
 	switch cmd.Kind {
-	case CommandPut, CommandAppend, CommandCAS, CommandTxn:
+	case CommandPut, CommandAppend, CommandCAS, CommandTxn, CommandLeaseRevoke, CommandLeaseExpiry:
 		if !cmd.IsDuplicate {
 			kvs.currentRevision++
 		}
@@ -914,6 +1137,20 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 				kvs.pushWatchEvent(api.WatchEvent{
 					Key: cmd.Key, Value: v,
 					Revision: cmd.Revision, Type: api.EventPut,
+				})
+			}
+		case CommandLeaseRevoke:
+			for key := range cmd.ResultPairs {
+				kvs.pushWatchEvent(api.WatchEvent{
+					Key: key, Value: "",
+					Revision: cmd.Revision, Type: api.EventDelete,
+				})
+			}
+		case CommandLeaseExpiry:
+			for key := range cmd.ResultPairs {
+				kvs.pushWatchEvent(api.WatchEvent{
+					Key: key, Value: "",
+					Revision: cmd.Revision, Type: api.EventDelete,
 				})
 			}
 		case CommandTxn:

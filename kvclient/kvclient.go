@@ -59,6 +59,19 @@ func (c *KVClient) Put(ctx context.Context, key string, value string) (string, b
 	return putResp.PrevValue, putResp.KeyFound, putResp.Revision, err
 }
 
+func (c *KVClient) PutWithLease(ctx context.Context, key string, value string, leaseID int64) (string, bool, int64, error) {
+	putReq := api.PutRequest{
+		Key:       key,
+		Value:     value,
+		LeaseID:   leaseID,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var putResp api.PutResponse
+	err := c.send(ctx, "put", putReq, &putResp)
+	return putResp.PrevValue, putResp.KeyFound, putResp.Revision, err
+}
+
 func (c *KVClient) Append(ctx context.Context, key string, value string) (string, bool, int64, error) {
 	appendReq := api.AppendRequest{
 		Key:       key,
@@ -91,6 +104,37 @@ func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, 
 	var listResp api.ListResponse
 	err := c.send(ctx, "list", listReq, &listResp)
 	return listResp.Pairs, listResp.Revision, err
+}
+
+func (c *KVClient) LeaseGrant(ctx context.Context, ttl int64) (int64, int64, error) {
+	req := api.LeaseGrantRequest{
+		TTL:       ttl,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var resp api.LeaseGrantResponse
+	err := c.send(ctx, "lease/grant", req, &resp)
+	return resp.ID, resp.TTL, err
+}
+
+func (c *KVClient) LeaseKeepAlive(ctx context.Context, id int64) error {
+	req := api.LeaseKeepAliveRequest{
+		ID:        id,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var resp api.LeaseKeepAliveResponse
+	return c.send(ctx, "lease/keepalive", req, &resp)
+}
+
+func (c *KVClient) LeaseRevoke(ctx context.Context, id int64) error {
+	req := api.LeaseRevokeRequest{
+		ID:        id,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var resp api.LeaseRevokeResponse
+	return c.send(ctx, "lease/revoke", req, &resp)
 }
 
 func (c *KVClient) Txn(ctx context.Context, conditions []api.TxnCondition, success, failure []api.TxnOp) (bool, []api.TxnOpResult, int64, error) {

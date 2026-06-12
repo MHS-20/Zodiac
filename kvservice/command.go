@@ -19,6 +19,10 @@ type Command struct {
 	Txn     *TxnData
 	TxnResult *TxnApplyResult
 
+	LeaseID  int64
+	LeaseTTL int64
+	LeaseIDs []int64
+
 	ServiceID           int
 	ClientID, RequestID int64
 	IsDuplicate         bool
@@ -34,16 +38,24 @@ const (
 	CommandCAS
 	CommandList
 	CommandTxn
+	CommandLeaseGrant
+	CommandLeaseKeepAlive
+	CommandLeaseRevoke
+	CommandLeaseExpiry
 )
 
 var commandName = map[CommandKind]string{
-	CommandInvalid: "invalid",
-	CommandGet:     "get",
-	CommandPut:     "put",
-	CommandAppend:  "append",
-	CommandCAS:     "cas",
-	CommandList:    "list",
-	CommandTxn:     "txn",
+	CommandInvalid:       "invalid",
+	CommandGet:           "get",
+	CommandPut:           "put",
+	CommandAppend:        "append",
+	CommandCAS:           "cas",
+	CommandList:          "list",
+	CommandTxn:           "txn",
+	CommandLeaseGrant:    "lease-grant",
+	CommandLeaseKeepAlive: "lease-keepalive",
+	CommandLeaseRevoke:   "lease-revoke",
+	CommandLeaseExpiry:   "lease-expiry",
 }
 
 func (ck CommandKind) String() string {

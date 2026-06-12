@@ -221,6 +221,16 @@ func (h *Harness) CheckSingleLeader() int {
 	return -1
 }
 
+func (h *Harness) CheckPutWithLease(c *kvclient.KVClient, key, value string, leaseID int64) (string, bool) {
+	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
+	defer cancel()
+	pv, f, _, err := c.PutWithLease(ctx, key, value, leaseID)
+	if err != nil {
+		h.t.Error(err)
+	}
+	return pv, f
+}
+
 func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, bool) {
 	ctx, cancel := context.WithTimeout(h.ctx, 500*time.Millisecond)
 	defer cancel()

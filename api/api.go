@@ -10,6 +10,7 @@ type PutRequest struct {
 
 	ClientID  int64
 	RequestID int64
+	LeaseID   int64
 }
 
 type PutResponse struct {
@@ -219,6 +220,7 @@ type TxnOp struct {
 	Key          string    `json:"key"`
 	Value        string    `json:"value,omitempty"`
 	CompareValue string    `json:"compare_value,omitempty"`
+	LeaseID      int64     `json:"lease_id,omitempty"`
 }
 
 type TxnRequest struct {
@@ -243,3 +245,42 @@ type TxnResponse struct {
 }
 
 func (tr *TxnResponse) Status() ResponseStatus { return tr.RespStatus }
+
+type LeaseGrantRequest struct {
+	TTL       int64 `json:"ttl"`
+	ClientID  int64 `json:"clientID"`
+	RequestID int64 `json:"requestID"`
+}
+
+type LeaseGrantResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+	ID         int64          `json:"id"`
+	TTL        int64          `json:"ttl"`
+}
+
+func (lr *LeaseGrantResponse) Status() ResponseStatus { return lr.RespStatus }
+
+type LeaseKeepAliveRequest struct {
+	ID        int64 `json:"id"`
+	ClientID  int64 `json:"clientID"`
+	RequestID int64 `json:"requestID"`
+}
+
+type LeaseKeepAliveResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+	ID         int64          `json:"id"`
+}
+
+func (lkr *LeaseKeepAliveResponse) Status() ResponseStatus { return lkr.RespStatus }
+
+type LeaseRevokeRequest struct {
+	ID        int64 `json:"id"`
+	ClientID  int64 `json:"clientID"`
+	RequestID int64 `json:"requestID"`
+}
+
+type LeaseRevokeResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+}
+
+func (lrr *LeaseRevokeResponse) Status() ResponseStatus { return lrr.RespStatus }
