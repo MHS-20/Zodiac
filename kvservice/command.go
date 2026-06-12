@@ -1,5 +1,7 @@
 package kvservice
 
+import "github.com/MHS-20/Zodiac/api"
+
 type Command struct {
 	Kind CommandKind
 
@@ -12,10 +14,14 @@ type Command struct {
 
 	ResultPairs map[string]string
 
+	Revision int64
+
+	Txn     *TxnData
+	TxnResult *TxnApplyResult
+
 	ServiceID           int
 	ClientID, RequestID int64
 	IsDuplicate         bool
-	Revision            int64
 }
 
 type CommandKind int
@@ -27,6 +33,7 @@ const (
 	CommandAppend
 	CommandCAS
 	CommandList
+	CommandTxn
 )
 
 var commandName = map[CommandKind]string{
@@ -36,8 +43,20 @@ var commandName = map[CommandKind]string{
 	CommandAppend:  "append",
 	CommandCAS:     "cas",
 	CommandList:    "list",
+	CommandTxn:     "txn",
 }
 
 func (ck CommandKind) String() string {
 	return commandName[ck]
+}
+
+type TxnData struct {
+	Conditions []api.TxnCondition
+	Success    []api.TxnOp
+	Failure    []api.TxnOp
+}
+
+type TxnApplyResult struct {
+	Succeeded bool
+	Results   []api.TxnOpResult
 }

@@ -139,6 +139,7 @@ func (kvs *KVService) ServeHTTP(port int) {
 	mux.HandleFunc("POST /append/", kvs.handleAppend)
 	mux.HandleFunc("POST /cas/", kvs.handleCAS)
 	mux.HandleFunc("POST /list/", kvs.handleList)
+	mux.HandleFunc("POST /txn/", kvs.handleTxn)
 	mux.HandleFunc("POST /join/", kvs.handleJoin)
 	mux.HandleFunc("POST /leave/", kvs.handleLeave)
 	mux.HandleFunc("GET /status/", kvs.handleStatus)
@@ -448,6 +449,60 @@ func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
 			}
 		} else {
 			kvs.sendHTTPResponse(w, api.ListResponse{RespStatus: api.StatusFailedCommit})
+		}
+	case <-req.Context().Done():
+		return
+	}
+}
+
+func (kvs *KVService) handleTxn(w http.ResponseWriter, req *http.Request) {
+	tr := &api.TxnRequest{}
+	if err := readRequestJSON(req, tr); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kvs.logger.Debug("HTTP TXN", "request", tr)
+
+	cmd := Command{
+		Kind: CommandTxn,
+		Txn: &TxnData{
+			Conditions: tr.Conditions,
+			Success:    tr.Success,
+			Failure:    tr.Failure,
+		},
+		ServiceID: kvs.id,
+		ClientID:  tr.ClientID,
+		RequestID: tr.RequestID,
+	}
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
+		kvs.sendHTTPResponse(w, api.TxnResponse{RespStatus: api.StatusNotLeader})
+		return
+	}
+
+	sub := kvs.createCommitSubscription(result.Index)
+
+	select {
+	case commitCmd, ok := <-sub:
+		if !ok {
+			kvs.sendHTTPResponse(w, api.TxnResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
+		if commitCmd.ServiceID == kvs.id {
+			if commitCmd.IsDuplicate {
+				kvs.sendHTTPResponse(w, api.TxnResponse{
+					RespStatus: api.StatusDuplicateRequest,
+				})
+			} else {
+				kvs.sendHTTPResponse(w, api.TxnResponse{
+					RespStatus: api.StatusOK,
+					Succeeded:  commitCmd.TxnResult.Succeeded,
+					Results:    commitCmd.TxnResult.Results,
+					Revision:   commitCmd.Revision,
+				})
+			}
+		} else {
+			kvs.sendHTTPResponse(w, api.TxnResponse{RespStatus: api.StatusFailedCommit})
 		}
 	case <-req.Context().Done():
 		return
@@ -806,6 +861,9 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
 		case CommandCAS:
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
+		case CommandTxn:
+			succeeded, results := kvs.ds.Txn(cmd.Txn.Conditions, cmd.Txn.Success, cmd.Txn.Failure)
+			cmd.TxnResult = &TxnApplyResult{Succeeded: succeeded, Results: results}
 		case CommandList:
 			cmd.ResultPairs = kvs.ds.List(cmd.Key)
 		default:
@@ -816,7 +874,7 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 
 	// Assign revision: increment on non-duplicate writes, snapshot current for reads
 	switch cmd.Kind {
-	case CommandPut, CommandAppend, CommandCAS:
+	case CommandPut, CommandAppend, CommandCAS, CommandTxn:
 		if !cmd.IsDuplicate {
 			kvs.currentRevision++
 		}
@@ -857,6 +915,42 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 					Key: cmd.Key, Value: v,
 					Revision: cmd.Revision, Type: api.EventPut,
 				})
+			}
+		case CommandTxn:
+			if cmd.TxnResult != nil {
+				branch := cmd.Txn.Success
+				if !cmd.TxnResult.Succeeded {
+					branch = cmd.Txn.Failure
+				}
+				for i, r := range cmd.TxnResult.Results {
+					op := branch[i]
+					switch op.Op {
+					case api.TxnOpDelete:
+						kvs.pushWatchEvent(api.WatchEvent{
+							Key: r.Key, Value: r.PrevValue,
+							Revision: cmd.Revision, Type: api.EventDelete,
+						})
+					case api.TxnOpCAS:
+						if r.KeyFound && r.PrevValue == op.CompareValue {
+							v, _ := kvs.ds.Get(op.Key)
+							kvs.pushWatchEvent(api.WatchEvent{
+								Key: op.Key, Value: v,
+								Revision: cmd.Revision, Type: api.EventPut,
+							})
+						}
+					case api.TxnOpAppend:
+						v, _ := kvs.ds.Get(op.Key)
+						kvs.pushWatchEvent(api.WatchEvent{
+							Key: op.Key, Value: v,
+							Revision: cmd.Revision, Type: api.EventPut,
+						})
+					default:
+						kvs.pushWatchEvent(api.WatchEvent{
+							Key: op.Key, Value: op.Value,
+							Revision: cmd.Revision, Type: api.EventPut,
+						})
+					}
+				}
 			}
 		}
 	}

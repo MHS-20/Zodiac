@@ -93,6 +93,19 @@ func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, 
 	return listResp.Pairs, listResp.Revision, err
 }
 
+func (c *KVClient) Txn(ctx context.Context, conditions []api.TxnCondition, success, failure []api.TxnOp) (bool, []api.TxnOpResult, int64, error) {
+	req := api.TxnRequest{
+		Conditions: conditions,
+		Success:    success,
+		Failure:    failure,
+		ClientID:   c.clientID,
+		RequestID:  c.requestID.Add(1),
+	}
+	var txnResp api.TxnResponse
+	err := c.send(ctx, "txn", req, &txnResp)
+	return txnResp.Succeeded, txnResp.Results, txnResp.Revision, err
+}
+
 func (c *KVClient) CAS(ctx context.Context, key string, compare string, value string) (string, bool, int64, error) {
 	casReq := api.CASRequest{
 		Key:          key,

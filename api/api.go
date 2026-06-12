@@ -187,3 +187,59 @@ type WatchEvent struct {
 	Revision int64          `json:"revision"`
 	Type     WatchEventType `json:"-"`
 }
+
+type CompareOp int
+
+const (
+	CompareEQ      CompareOp = iota
+	CompareNEQ
+	CompareGTE
+	CompareLTE
+	CompareExists
+	CompareNotExists
+)
+
+type TxnOpType int
+
+const (
+	TxnOpPut    TxnOpType = iota
+	TxnOpDelete
+	TxnOpCAS
+	TxnOpAppend
+)
+
+type TxnCondition struct {
+	Key     string    `json:"key"`
+	Compare CompareOp `json:"compare"`
+	Value   string    `json:"value"`
+}
+
+type TxnOp struct {
+	Op           TxnOpType `json:"op"`
+	Key          string    `json:"key"`
+	Value        string    `json:"value,omitempty"`
+	CompareValue string    `json:"compare_value,omitempty"`
+}
+
+type TxnRequest struct {
+	Conditions []TxnCondition `json:"conditions"`
+	Success    []TxnOp        `json:"success"`
+	Failure    []TxnOp        `json:"failure"`
+	ClientID   int64          `json:"clientID"`
+	RequestID  int64          `json:"requestID"`
+}
+
+type TxnOpResult struct {
+	Key       string `json:"key"`
+	PrevValue string `json:"prev_value,omitempty"`
+	KeyFound  bool   `json:"key_found"`
+}
+
+type TxnResponse struct {
+	RespStatus ResponseStatus `json:"resp_status"`
+	Succeeded  bool           `json:"succeeded"`
+	Results    []TxnOpResult  `json:"results"`
+	Revision   int64          `json:"revision"`
+}
+
+func (tr *TxnResponse) Status() ResponseStatus { return tr.RespStatus }
