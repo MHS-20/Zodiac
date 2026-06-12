@@ -1,13 +1,17 @@
 package kvclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -251,6 +255,83 @@ func NewWithDiscovery(ctx context.Context, seedAddrs []string) *KVClient {
 		return New(seedAddrs)
 	}
 	return New(addrs)
+}
+
+// Watch subscribes to an SSE event stream for keys matching the given prefix.
+// If since > 0, events after that revision are replayed from the ring buffer.
+// Returns a channel that receives WatchEvents until the context is cancelled
+// or the connection drops.
+func (c *KVClient) Watch(ctx context.Context, prefix string, since int64) (<-chan api.WatchEvent, error) {
+	path := fmt.Sprintf("http://%s/watch/?prefix=%s&since=%d", c.addrs[c.assumedLeader], prefix, since)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating watch request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("watch request failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("watch request returned status %d", resp.StatusCode)
+	}
+
+	ch := make(chan api.WatchEvent, 64)
+	go c.readSSE(ctx, resp.Body, ch)
+	return ch, nil
+}
+
+func (c *KVClient) readSSE(ctx context.Context, body io.ReadCloser, ch chan<- api.WatchEvent) {
+	defer body.Close()
+	defer close(ch)
+
+	scanner := bufio.NewScanner(body)
+	var eventType string
+	var eventID string
+	var eventData string
+
+	flushEvent := func() {
+		if eventType == "" || eventData == "" {
+			return
+		}
+		evType, ok := api.WatchEventTypeFromName[eventType]
+		if !ok {
+			return
+		}
+		var ev api.WatchEvent
+		if err := json.Unmarshal([]byte(eventData), &ev); err != nil {
+			return
+		}
+		ev.Type = evType
+		if rev, err := strconv.ParseInt(eventID, 10, 64); err == nil && rev > 0 {
+			ev.Revision = rev
+		}
+		select {
+		case ch <- ev:
+		case <-ctx.Done():
+		}
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			flushEvent()
+			eventType = ""
+			eventID = ""
+			eventData = ""
+			continue
+		}
+		if strings.HasPrefix(line, "event: ") {
+			eventType = strings.TrimPrefix(line, "event: ")
+		} else if strings.HasPrefix(line, "id: ") {
+			eventID = strings.TrimPrefix(line, "id: ")
+		} else if strings.HasPrefix(line, "data: ") {
+			eventData = strings.TrimPrefix(line, "data: ")
+		}
+	}
+	// Flush any partial event at EOF
+	flushEvent()
 }
 
 // RefreshMembers updates the client's address list by querying /members/ on

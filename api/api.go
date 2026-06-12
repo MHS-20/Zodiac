@@ -160,3 +160,30 @@ type MembersResponse struct {
 }
 
 func (mr *MembersResponse) Status() ResponseStatus { return mr.RespStatus }
+
+type WatchEventType int
+
+const (
+	EventInvalid WatchEventType = iota
+	EventPut
+	EventDelete
+)
+
+var WatchEventName = map[WatchEventType]string{
+	EventPut:    "put",
+	EventDelete: "delete",
+}
+
+func (et WatchEventType) String() string { return WatchEventName[et] }
+
+var WatchEventTypeFromName = map[string]WatchEventType{
+	"put":    EventPut,
+	"delete": EventDelete,
+}
+
+type WatchEvent struct {
+	Key      string         `json:"key"`
+	Value    string         `json:"value,omitempty"`
+	Revision int64          `json:"revision"`
+	Type     WatchEventType `json:"-"`
+}

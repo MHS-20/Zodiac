@@ -84,6 +84,12 @@ type KVService struct {
 	pendingJoinAddrs map[int]peerInfo
 
 	storage raft.Storage
+
+	// Watch subsystem: event buffer + subscription manager
+	eventBuf  *eventBuffer
+	watchSubs map[int64]*watchSub
+	watchMu   sync.Mutex
+	watchSeq  int64
 }
 
 func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVService {
@@ -110,6 +116,8 @@ func New(id int, peerIds []int, storage raft.Storage, readyChan <-chan any) *KVS
 		pendingJoinAddrs:       make(map[int]peerInfo),
 		storage:                storage,
 		currentRevision:        0,
+		eventBuf:               newEventBuffer(eventBufferSize),
+		watchSubs:              make(map[int64]*watchSub),
 	}
 
 	kvs.loadPeers()
@@ -135,6 +143,7 @@ func (kvs *KVService) ServeHTTP(port int) {
 	mux.HandleFunc("POST /leave/", kvs.handleLeave)
 	mux.HandleFunc("GET /status/", kvs.handleStatus)
 	mux.HandleFunc("GET /members/", kvs.handleMembers)
+	mux.HandleFunc("GET /watch/", kvs.handleWatch)
 
 	kvs.srv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
@@ -822,6 +831,34 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 	if sub != nil {
 		sub <- cmd
 		close(sub)
+	}
+
+	// Push watch events for non-duplicate mutations
+	if !cmd.IsDuplicate {
+		switch cmd.Kind {
+		case CommandPut:
+			kvs.pushWatchEvent(api.WatchEvent{
+				Key: cmd.Key, Value: cmd.Value,
+				Revision: cmd.Revision, Type: api.EventPut,
+			})
+		case CommandAppend:
+			v, _ := kvs.ds.Get(cmd.Key)
+			kvs.pushWatchEvent(api.WatchEvent{
+				Key: cmd.Key, Value: v,
+				Revision: cmd.Revision, Type: api.EventPut,
+			})
+		case CommandCAS:
+			// Only emit an event if the compare matched and value was updated.
+			// ResultFound indicates the key existed; compare ResultValue against
+			// CompareValue to determine if the CAS actually changed the value.
+			if cmd.ResultFound && cmd.ResultValue == cmd.CompareValue {
+				v, _ := kvs.ds.Get(cmd.Key)
+				kvs.pushWatchEvent(api.WatchEvent{
+					Key: cmd.Key, Value: v,
+					Revision: cmd.Revision, Type: api.EventPut,
+				})
+			}
+		}
 	}
 
 	if kvs.lastSnapshotIndex >= 0 {
