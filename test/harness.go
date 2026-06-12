@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -14,6 +15,16 @@ import (
 	"github.com/MHS-20/Zodiac/kvclient"
 	"github.com/MHS-20/Zodiac/kvservice"
 )
+
+func freePort() int {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		panic(err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
 
 func init() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
@@ -37,6 +48,10 @@ type Harness struct {
 }
 
 func NewHarness(t *testing.T, n int) *Harness {
+	return NewHarnessWithPort(t, n, 0)
+}
+
+func NewHarnessWithPort(t *testing.T, n int, basePort int) *Harness {
 	kvss := make([]*kvservice.KVService, n)
 	ready := make(chan any)
 	connected := make([]bool, n)
@@ -68,7 +83,12 @@ func NewHarness(t *testing.T, n int) *Harness {
 
 	kvServiceAddrs := make([]string, n)
 	for i := range n {
-		port := 14200 + i
+		var port int
+		if basePort > 0 {
+			port = basePort + i
+		} else {
+			port = freePort()
+		}
 		kvss[i].ServeHTTP(port)
 
 		kvServiceAddrs[i] = fmt.Sprintf("localhost:%d", port)
@@ -139,7 +159,9 @@ func (h *Harness) RestartService(id int) {
 	}
 	ready := make(chan any)
 	h.kvCluster[id] = kvservice.New(id, peerIds, h.storage[id], ready)
-	h.kvCluster[id].ServeHTTP(14200 + id)
+	port := freePort()
+	h.kvCluster[id].ServeHTTP(port)
+	h.kvServiceAddrs[id] = fmt.Sprintf("localhost:%d", port)
 
 	h.ReconnectServiceToPeers(id)
 	close(ready)
