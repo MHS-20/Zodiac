@@ -18,6 +18,53 @@ func checkGet(t *testing.T, ds *DataStore, k string, v string, found bool) {
 	}
 }
 
+func checkList(t *testing.T, ds *DataStore, prefix string, want map[string]string) {
+	t.Helper()
+	got := ds.List(prefix)
+	if len(got) != len(want) {
+		t.Errorf("List(%q) returned %d pairs, want %d: %v", prefix, len(got), len(want), got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("List(%q)[%q] = %q, want %q", prefix, k, got[k], v)
+		}
+	}
+}
+
+func TestList(t *testing.T) {
+	ds := NewDataStore()
+	ds.Put("/nodes/1/cpu", "4")
+	ds.Put("/nodes/1/mem", "16")
+	ds.Put("/nodes/2/cpu", "8")
+	ds.Put("/nodes/2/mem", "32")
+	ds.Put("/pods/a", "running")
+	ds.Put("/pods/b", "pending")
+
+	checkList(t, ds, "/nodes/1/", map[string]string{
+		"/nodes/1/cpu": "4",
+		"/nodes/1/mem": "16",
+	})
+	checkList(t, ds, "/nodes/", map[string]string{
+		"/nodes/1/cpu": "4",
+		"/nodes/1/mem": "16",
+		"/nodes/2/cpu": "8",
+		"/nodes/2/mem": "32",
+	})
+	checkList(t, ds, "/pods/", map[string]string{
+		"/pods/a": "running",
+		"/pods/b": "pending",
+	})
+	checkList(t, ds, "/nonexistent/", map[string]string{})
+	checkList(t, ds, "", map[string]string{
+		"/nodes/1/cpu": "4",
+		"/nodes/1/mem": "16",
+		"/nodes/2/cpu": "8",
+		"/nodes/2/mem": "32",
+		"/pods/a":      "running",
+		"/pods/b":      "pending",
+	})
+}
+
 func checkCAS(t *testing.T, ds *DataStore, k string, comp string, v string, prev string, found bool) {
 	t.Helper()
 	gotPrev, gotFound := ds.CAS(k, comp, v)

@@ -10,6 +10,8 @@ type Command struct {
 	ResultValue string
 	ResultFound bool
 
+	ResultPairs map[string]string
+
 	ServiceID           int
 	ClientID, RequestID int64
 	IsDuplicate         bool
@@ -23,6 +25,7 @@ const (
 	CommandPut
 	CommandAppend
 	CommandCAS
+	CommandList
 )
 
 var commandName = map[CommandKind]string{
@@ -31,6 +34,7 @@ var commandName = map[CommandKind]string{
 	CommandPut:     "put",
 	CommandAppend:  "append",
 	CommandCAS:     "cas",
+	CommandList:    "list",
 }
 
 func (ck CommandKind) String() string {

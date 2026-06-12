@@ -20,7 +20,7 @@ func main() {
 	flag.Parse()
 
 	if flag.NArg() < 1 {
-		fmt.Fprintf(os.Stderr, "Usage: zodiac-client [flags] <command> [args...]\n\nCommands:\n  get <key>\n  put <key> <value>\n  append <key> <value>\n  cas <key> <compare> <value>\n")
+		fmt.Fprintf(os.Stderr, "Usage: zodiac-client [flags] <command> [args...]\n\nCommands:\n  get <key>\n  put <key> <value>\n  append <key> <value>\n  cas <key> <compare> <value>\n  list <prefix>\n")
 		os.Exit(1)
 	}
 
@@ -88,6 +88,18 @@ func main() {
 		}
 		if found {
 			fmt.Println(prev)
+		}
+
+	case "list":
+		if len(args) < 1 {
+			log.Fatal("Usage: zodiac-client list <prefix>")
+		}
+		pairs, err := c.List(ctx, args[0])
+		if err != nil {
+			log.Fatal(err)
+		}
+		for k, v := range pairs {
+			fmt.Printf("%s: %s\n", k, v)
 		}
 
 	default:

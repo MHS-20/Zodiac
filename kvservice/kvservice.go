@@ -127,6 +127,7 @@ func (kvs *KVService) ServeHTTP(port int) {
 	mux.HandleFunc("POST /put/", kvs.handlePut)
 	mux.HandleFunc("POST /append/", kvs.handleAppend)
 	mux.HandleFunc("POST /cas/", kvs.handleCAS)
+	mux.HandleFunc("POST /list/", kvs.handleList)
 	mux.HandleFunc("POST /join/", kvs.handleJoin)
 	mux.HandleFunc("POST /leave/", kvs.handleLeave)
 	mux.HandleFunc("GET /status/", kvs.handleStatus)
@@ -382,6 +383,54 @@ func (kvs *KVService) handleCAS(w http.ResponseWriter, req *http.Request) {
 			}
 		} else {
 			kvs.sendHTTPResponse(w, api.CASResponse{RespStatus: api.StatusFailedCommit})
+		}
+	case <-req.Context().Done():
+		return
+	}
+}
+
+func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
+	lr := &api.ListRequest{}
+	if err := readRequestJSON(req, lr); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kvs.logger.Debug("HTTP LIST", "request", lr)
+
+	cmd := Command{
+		Kind:      CommandList,
+		Key:       lr.Prefix,
+		ServiceID: kvs.id,
+		ClientID:  lr.ClientID,
+		RequestID: lr.RequestID,
+	}
+	result := kvs.rs.Submit(cmd)
+	if result.Index < 0 {
+		kvs.sendHTTPResponse(w, api.ListResponse{RespStatus: api.StatusNotLeader})
+		return
+	}
+
+	sub := kvs.createCommitSubscription(result.Index)
+
+	select {
+	case commitCmd, ok := <-sub:
+		if !ok {
+			kvs.sendHTTPResponse(w, api.ListResponse{RespStatus: api.StatusFailedCommit})
+			return
+		}
+		if commitCmd.ServiceID == kvs.id {
+			if commitCmd.IsDuplicate {
+				kvs.sendHTTPResponse(w, api.ListResponse{
+					RespStatus: api.StatusDuplicateRequest,
+				})
+			} else {
+				kvs.sendHTTPResponse(w, api.ListResponse{
+					RespStatus: api.StatusOK,
+					Pairs:      commitCmd.ResultPairs,
+				})
+			}
+		} else {
+			kvs.sendHTTPResponse(w, api.ListResponse{RespStatus: api.StatusFailedCommit})
 		}
 	case <-req.Context().Done():
 		return
@@ -722,6 +771,8 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 		kvs.logger.Debug("duplicate request", "requestID", cmd.RequestID, "clientID", cmd.ClientID)
 		if cmd.Kind == CommandGet {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
+		} else if cmd.Kind == CommandList {
+			cmd.ResultPairs = kvs.ds.List(cmd.Key)
 		}
 		cmd.IsDuplicate = true
 	} else {
@@ -734,9 +785,11 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Put(cmd.Key, cmd.Value)
 		case CommandAppend:
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Append(cmd.Key, cmd.Value)
-		case CommandCAS:
-			cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
-		default:
+	case CommandCAS:
+		cmd.ResultValue, cmd.ResultFound = kvs.ds.CAS(cmd.Key, cmd.CompareValue, cmd.Value)
+	case CommandList:
+		cmd.ResultPairs = kvs.ds.List(cmd.Key)
+	default:
 			kvs.Unlock()
 			panic(fmt.Errorf("unexpected command %v", cmd))
 		}

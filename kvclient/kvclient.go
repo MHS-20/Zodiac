@@ -78,6 +78,17 @@ func (c *KVClient) Get(ctx context.Context, key string) (string, bool, error) {
 	return getResp.Value, getResp.KeyFound, err
 }
 
+func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, error) {
+	listReq := api.ListRequest{
+		Prefix:    prefix,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var listResp api.ListResponse
+	err := c.send(ctx, "list", listReq, &listResp)
+	return listResp.Pairs, err
+}
+
 func (c *KVClient) CAS(ctx context.Context, key string, compare string, value string) (string, bool, error) {
 	casReq := api.CASRequest{
 		Key:          key,

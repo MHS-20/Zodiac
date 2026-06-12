@@ -2,6 +2,7 @@ package kvservice
 
 import (
 	"maps"
+	"strings"
 	"sync"
 )
 
@@ -51,6 +52,19 @@ func (ds *DataStore) CAS(key, compare, value string) (string, bool) {
 		ds.data[key] = value
 	}
 	return prevValue, ok
+}
+
+func (ds *DataStore) List(prefix string) map[string]string {
+	ds.Lock()
+	defer ds.Unlock()
+
+	result := make(map[string]string)
+	for k, v := range ds.data {
+		if strings.HasPrefix(k, prefix) {
+			result[k] = v
+		}
+	}
+	return result
 }
 
 func (ds *DataStore) CopyAll() map[string]string {

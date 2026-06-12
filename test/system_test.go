@@ -455,3 +455,62 @@ func TestAppendLinearizableAfterCrash(t *testing.T) {
 	c2 := h.NewClient()
 	h.CheckGet(c2, "foo", "barmira")
 }
+
+func TestListBasic(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	h.CheckSingleLeader()
+
+	c := h.NewClient()
+	h.CheckPut(c, "/nodes/1/cpu", "4")
+	h.CheckPut(c, "/nodes/1/mem", "16")
+	h.CheckPut(c, "/nodes/2/cpu", "8")
+	h.CheckPut(c, "/pods/a", "running")
+
+	pairs, err := c.List(context.Background(), "/nodes/1/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 2 || pairs["/nodes/1/cpu"] != "4" || pairs["/nodes/1/mem"] != "16" {
+		t.Errorf("got %v, want 2 entries under /nodes/1/", pairs)
+	}
+
+	pairs, err = c.List(context.Background(), "/nonexistent/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 0 {
+		t.Errorf("got %d entries, want 0", len(pairs))
+	}
+}
+
+func TestListAcrossCluster(t *testing.T) {
+	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+
+	h := NewHarness(t, 3)
+	defer h.Shutdown()
+	lid := h.CheckSingleLeader()
+
+	c1 := h.NewClientSingleService(lid)
+	c1.Put(context.Background(), "/nodes/1/cpu", "4")
+	c1.Put(context.Background(), "/nodes/1/mem", "16")
+
+	h.CrashService(lid)
+	newLid := h.CheckSingleLeader()
+
+	c2 := h.NewClientSingleService(newLid)
+	pairs, err := c2.List(context.Background(), "/nodes/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pairs) != 2 {
+		t.Errorf("got %d entries, want 2: %v", len(pairs), pairs)
+	}
+	if pairs["/nodes/1/cpu"] != "4" || pairs["/nodes/1/mem"] != "16" {
+		t.Errorf("unexpected values: %v", pairs)
+	}
+
+	h.RestartService(lid)
+}

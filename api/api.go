@@ -94,6 +94,21 @@ var responseName = map[ResponseStatus]string{
 	StatusDuplicateRequest: "DuplicateRequest",
 }
 
+type ListRequest struct {
+	Prefix    string
+	ClientID  int64
+	RequestID int64
+}
+
+type ListResponse struct {
+	RespStatus ResponseStatus
+	Pairs      map[string]string
+}
+
+func (lr *ListResponse) Status() ResponseStatus {
+	return lr.RespStatus
+}
+
 func (rs ResponseStatus) String() string {
 	return responseName[rs]
 }
