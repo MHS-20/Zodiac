@@ -95,6 +95,19 @@ func (c *KVClient) Get(ctx context.Context, key string) (string, bool, int64, er
 	return getResp.Value, getResp.KeyFound, getResp.Revision, err
 }
 
+func (c *KVClient) ListPaged(ctx context.Context, prefix string, limit int, keyAfter string) (map[string]string, string, int64, error) {
+	listReq := api.ListRequest{
+		Prefix:    prefix,
+		Limit:     limit,
+		KeyAfter:  keyAfter,
+		ClientID:  c.clientID,
+		RequestID: c.requestID.Add(1),
+	}
+	var listResp api.ListResponse
+	err := c.send(ctx, "list", listReq, &listResp)
+	return listResp.Pairs, listResp.NextKey, listResp.Revision, err
+}
+
 func (c *KVClient) List(ctx context.Context, prefix string) (map[string]string, int64, error) {
 	listReq := api.ListRequest{
 		Prefix:    prefix,

@@ -23,6 +23,9 @@ type Command struct {
 	LeaseTTL int64
 	LeaseIDs []int64
 
+	Limit    int
+	KeyAfter string
+
 	ServiceID           int
 	ClientID, RequestID int64
 	IsDuplicate         bool

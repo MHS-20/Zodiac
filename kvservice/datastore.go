@@ -2,6 +2,7 @@ package kvservice
 
 import (
 	"maps"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -129,6 +130,30 @@ func (ds *DataStore) List(prefix string) map[string]string {
 		}
 	}
 	return result
+}
+
+func (ds *DataStore) ListPaged(prefix string, limit int, keyAfter string) (map[string]string, string) {
+	ds.Lock()
+	defer ds.Unlock()
+
+	var keys []string
+	for k := range ds.data {
+		if strings.HasPrefix(k, prefix) && k >= keyAfter {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	result := make(map[string]string)
+	var nextKey string
+	for i, k := range keys {
+		if limit > 0 && i >= limit {
+			nextKey = k
+			break
+		}
+		result[k] = ds.data[k]
+	}
+	return result, nextKey
 }
 
 func (ds *DataStore) CopyAll() map[string]string {

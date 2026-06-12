@@ -462,6 +462,8 @@ func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
 	cmd := Command{
 		Kind:      CommandList,
 		Key:       lr.Prefix,
+		Limit:     lr.Limit,
+		KeyAfter:  lr.KeyAfter,
 		ServiceID: kvs.id,
 		ClientID:  lr.ClientID,
 		RequestID: lr.RequestID,
@@ -489,6 +491,7 @@ func (kvs *KVService) handleList(w http.ResponseWriter, req *http.Request) {
 				kvs.sendHTTPResponse(w, api.ListResponse{
 					RespStatus: api.StatusOK,
 					Pairs:      commitCmd.ResultPairs,
+					NextKey:    commitCmd.ResultValue,
 					Revision:   commitCmd.Revision,
 				})
 			}
@@ -1046,7 +1049,11 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 		if cmd.Kind == CommandGet {
 			cmd.ResultValue, cmd.ResultFound = kvs.ds.Get(cmd.Key)
 		} else if cmd.Kind == CommandList {
-			cmd.ResultPairs = kvs.ds.List(cmd.Key)
+			if cmd.Limit > 0 {
+				cmd.ResultPairs, cmd.ResultValue = kvs.ds.ListPaged(cmd.Key, cmd.Limit, cmd.KeyAfter)
+			} else {
+				cmd.ResultPairs = kvs.ds.List(cmd.Key)
+			}
 		}
 		cmd.IsDuplicate = true
 	} else {
@@ -1067,7 +1074,11 @@ func (kvs *KVService) handleCommand(cmd Command, index, term int) {
 			succeeded, results := kvs.ds.Txn(cmd.Txn.Conditions, cmd.Txn.Success, cmd.Txn.Failure)
 			cmd.TxnResult = &TxnApplyResult{Succeeded: succeeded, Results: results}
 		case CommandList:
-			cmd.ResultPairs = kvs.ds.List(cmd.Key)
+			if cmd.Limit > 0 {
+				cmd.ResultPairs, cmd.ResultValue = kvs.ds.ListPaged(cmd.Key, cmd.Limit, cmd.KeyAfter)
+			} else {
+				cmd.ResultPairs = kvs.ds.List(cmd.Key)
+			}
 		case CommandLeaseGrant:
 			id := kvs.ds.GrantLease(cmd.LeaseTTL)
 			cmd.ResultValue = strconv.FormatInt(id, 10)

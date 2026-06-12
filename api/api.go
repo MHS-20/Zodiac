@@ -101,6 +101,8 @@ var responseName = map[ResponseStatus]string{
 
 type ListRequest struct {
 	Prefix    string
+	Limit     int
+	KeyAfter  string
 	ClientID  int64
 	RequestID int64
 }
@@ -108,6 +110,7 @@ type ListRequest struct {
 type ListResponse struct {
 	RespStatus ResponseStatus
 	Pairs      map[string]string
+	NextKey    string
 	Revision   int64
 }
 
