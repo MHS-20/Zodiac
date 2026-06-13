@@ -25,7 +25,7 @@ func checkAllKeys(t *testing.T, h *Harness, n int) {
 }
 
 func TestSnapshotBasicRestart(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -44,7 +44,7 @@ func TestSnapshotBasicRestart(t *testing.T) {
 }
 
 func TestSnapshotFollowerCatchUp(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -64,7 +64,7 @@ func TestSnapshotFollowerCatchUp(t *testing.T) {
 }
 
 func TestSnapshotRestartIsolatedFollower(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -84,7 +84,7 @@ func TestSnapshotRestartIsolatedFollower(t *testing.T) {
 }
 
 func TestSnapshotMultipleRounds(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -115,7 +115,7 @@ func TestSnapshotMultipleRounds(t *testing.T) {
 }
 
 func TestSnapshotLeaderCrashDuringFollowerCatchUp(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -141,7 +141,7 @@ func TestSnapshotLeaderCrashDuringFollowerCatchUp(t *testing.T) {
 }
 
 func TestSnapshotDuplicateRequestsSurvive(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()

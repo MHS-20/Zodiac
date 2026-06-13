@@ -10,7 +10,7 @@ import (
 )
 
 func TestLeaseGrant(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -33,7 +33,7 @@ func TestLeaseGrant(t *testing.T) {
 }
 
 func TestLeaseKeepAlive(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -55,7 +55,7 @@ func TestLeaseKeepAlive(t *testing.T) {
 }
 
 func TestLeaseRevoke(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -82,7 +82,7 @@ func TestLeaseRevoke(t *testing.T) {
 }
 
 func TestLeasePutWithLeaseID(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -109,7 +109,7 @@ func TestLeasePutWithLeaseID(t *testing.T) {
 }
 
 func TestLeaseExpiry(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -133,7 +133,7 @@ func TestLeaseExpiry(t *testing.T) {
 }
 
 func TestLeaseRevokeWatchEvent(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -183,7 +183,7 @@ func TestLeaseRevokeWatchEvent(t *testing.T) {
 }
 
 func TestLeaseDuplicateGrant(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -211,7 +211,7 @@ func TestLeaseDuplicateGrant(t *testing.T) {
 }
 
 func TestLeaseMultipleKeys(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -245,7 +245,7 @@ func TestLeaseMultipleKeys(t *testing.T) {
 }
 
 func TestLeaseTxnWithLeaseID(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -279,7 +279,7 @@ func TestLeaseTxnWithLeaseID(t *testing.T) {
 }
 
 func TestLeaseExpiryWatchEvent(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()

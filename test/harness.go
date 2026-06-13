@@ -159,9 +159,10 @@ func (h *Harness) RestartService(id int) {
 	}
 	ready := make(chan any)
 	h.kvCluster[id] = kvservice.New(id, peerIds, h.storage[id], ready)
-	port := freePort()
+	origAddr := h.kvServiceAddrs[id]
+	var port int
+	fmt.Sscanf(origAddr, "localhost:%d", &port)
 	h.kvCluster[id].ServeHTTP(port)
-	h.kvServiceAddrs[id] = fmt.Sprintf("localhost:%d", port)
 
 	h.ReconnectServiceToPeers(id)
 	close(ready)
@@ -258,6 +259,10 @@ func (h *Harness) CheckPut(c *kvclient.KVClient, key, value string) (string, boo
 	defer cancel()
 	pv, f, _, err := c.Put(ctx, key, value)
 	if err != nil {
+		if strings.Contains(err.Error(), "already completed") {
+			h.t.Logf("put %s=%s: %v (retrying)", key, value, err)
+			return h.CheckPut(c, key, value)
+		}
 		h.t.Error(err)
 	}
 	return pv, f

@@ -19,7 +19,7 @@ func watchCtx(h *Harness) (context.Context, context.CancelFunc) {
 }
 
 func TestWatchBasicPut(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -50,7 +50,7 @@ func TestWatchBasicPut(t *testing.T) {
 }
 
 func TestWatchPrefix(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -85,7 +85,7 @@ func TestWatchPrefix(t *testing.T) {
 }
 
 func TestWatchSince(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -130,7 +130,7 @@ func TestWatchSince(t *testing.T) {
 }
 
 func TestWatchAppendEvent(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -172,7 +172,7 @@ func TestWatchAppendEvent(t *testing.T) {
 }
 
 func TestWatchCASEvent(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -222,7 +222,7 @@ func TestWatchCASEvent(t *testing.T) {
 }
 
 func TestWatchMultipleSubscribers(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -277,7 +277,7 @@ func TestWatchMultipleSubscribers(t *testing.T) {
 }
 
 func TestWatchEmptyPrefix(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()

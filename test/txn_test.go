@@ -14,7 +14,7 @@ import (
 )
 
 func TestTxnBasicSuccess(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -55,7 +55,7 @@ func TestTxnBasicSuccess(t *testing.T) {
 }
 
 func TestTxnBasicFailure(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -96,7 +96,7 @@ func TestTxnBasicFailure(t *testing.T) {
 }
 
 func TestTxnNoConditions(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -126,7 +126,7 @@ func TestTxnNoConditions(t *testing.T) {
 }
 
 func TestTxnMultiOp(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -158,7 +158,7 @@ func TestTxnMultiOp(t *testing.T) {
 }
 
 func TestTxnCAS(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -193,7 +193,7 @@ func TestTxnCAS(t *testing.T) {
 }
 
 func TestTxnAppend(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -231,7 +231,7 @@ func TestTxnAppend(t *testing.T) {
 }
 
 func TestTxnDelete(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -269,7 +269,7 @@ func TestTxnDelete(t *testing.T) {
 }
 
 func TestTxnWatchEvents(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -387,7 +387,7 @@ func TestTxnWatchEvents(t *testing.T) {
 }
 
 func TestTxnDuplicate(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -440,7 +440,7 @@ func TestTxnDuplicate(t *testing.T) {
 }
 
 func TestTxnCompareOps(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()

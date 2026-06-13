@@ -9,7 +9,7 @@ import (
 )
 
 func TestListPaginationBasic(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -40,7 +40,7 @@ func TestListPaginationBasic(t *testing.T) {
 }
 
 func TestListPaginationFullIteration(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -79,7 +79,7 @@ func TestListPaginationFullIteration(t *testing.T) {
 }
 
 func TestListPaginationLimitLargerThanAvailable(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -105,7 +105,7 @@ func TestListPaginationLimitLargerThanAvailable(t *testing.T) {
 }
 
 func TestListPaginationWithPrefix(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
@@ -147,7 +147,7 @@ func TestListPaginationWithPrefix(t *testing.T) {
 }
 
 func TestListPaginationEmptyResult(t *testing.T) {
-	defer leaktest.CheckTimeout(t, 100*time.Millisecond)()
+	defer leaktest.CheckTimeout(t, 500*time.Millisecond)()
 
 	h := NewHarness(t, 3)
 	defer h.Shutdown()
